@@ -1,4 +1,9 @@
 [env]
-SECCY_SIGNING_IDENTITY = "Developer ID Application: YOUR_NAME (YOUR_ID)"
+SECCY_SIGNING_IDENTITY = "Developer ID Application: YOUR_NAME (YOUR_TEAM_ID)"
 SECCY_BUNDLE_ID = "fyi.seccy.cli"
 SECCY_PROFILE = "/path/to/your/seccy.provisionprofile"
+SECCY_APPLE_ID = "your-apple-account@example.com"
+SECCY_TEAM_ID = "YOUR_TEAM_ID"
+SECCY_NOTARY_PROFILE = "seccy-notary"
+# Optional: otherwise notarize:setup prompts for the app-specific password.
+# SECCY_APPLE_PASSWORD = "xxxx-xxxx-xxxx-xxxx"

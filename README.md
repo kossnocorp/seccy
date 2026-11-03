@@ -36,7 +36,7 @@ The data-protection keychain requires a code-signing identity and a provisioning
 Create a macOS App ID (default `fyi.seccy.cli`) and matching provisioning profile in your Apple Developer account, and install its signing certificate. Package with:
 
 ```sh
-export SECCY_SIGNING_IDENTITY='Apple Development: Your Name (TEAMID)'
+export SECCY_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
 export SECCY_PROFILE='/absolute/path/to/seccy.provisionprofile'
 # Set SECCY_BUNDLE_ID if using a different registered identifier.
 mise run package
@@ -44,6 +44,54 @@ export PATH="$PWD/target/Seccy.app/Contents/MacOS:$PATH"
 ```
 
 Run the executable **inside** the bundle; retain the bundle and embedded profile together when installing it elsewhere. Keep the same app identifier, keychain group and signing team across upgrades. Signing and provisioning credentials are not included in this repository. The package task builds and signs; it does not notarize or distribute the application.
+
+### Notarize for another Mac
+
+Use a Developer ID Application certificate and matching Developer ID profile.
+Set these alongside the signing settings in `mise.local.toml` (see
+`mise.local.toml.example`):
+
+```toml
+SECCY_APPLE_ID = "your-apple-account@example.com"
+SECCY_TEAM_ID = "YOUR_TEAM_ID"
+SECCY_NOTARY_PROFILE = "seccy-notary"
+```
+
+Create an app-specific password at [account.apple.com](https://account.apple.com/),
+then run the one-time setup in an interactive terminal:
+
+```sh
+mise run notarize:setup
+```
+
+Enter the app-specific password when prompted, or supply it through the environment:
+
+```sh
+SECCY_APPLE_PASSWORD='xxxx-xxxx-xxxx-xxxx' mise run notarize:setup
+```
+
+You can also set `SECCY_APPLE_PASSWORD` in your local mise config or inject it
+through fnox later. The setup script passes it to `notarytool --password`.
+Credentials are validated and stored in Keychain under `SECCY_NOTARY_PROFILE`.
+If that Keychain profile is already configured, skip setup.
+
+For each release:
+
+```sh
+mise run notarize
+```
+
+This builds and signs the app, submits a snapshot to Apple, waits for acceptance,
+staples and validates the ticket, checks Gatekeeper, and produces
+**`target/Seccy-notarized.zip`**. Send that archive, rather than the original
+`target/Seccy.app`, to the other Mac. The original build bundle isn't stapled;
+the archive contains the stapled snapshot.
+
+Submission results are saved in `target/notarization-result.json`; when a
+submission fails, the script also attempts to download Apple's diagnostic log
+to `target/notarization-log.json`. A failed run does not replace a previously
+successful release archive. Notarization requires Apple's network services and
+can take several minutes or longer.
 
 ## Configure and provision
 

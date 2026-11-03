@@ -42,8 +42,18 @@ depends = ["release"]
 run = "bash pkgs/macos/scripts/package.sh"
 
 [tasks."package:check"]
-description = "Check the Bash packaging script syntax"
-run = "bash -n pkgs/macos/scripts/package.sh"
+description = "Check the Bash packaging and notarization scripts"
+run = ["bash -n pkgs/macos/scripts/package.sh", "bash -n pkgs/macos/scripts/notarize.sh", "bash -n pkgs/macos/scripts/notarize-setup.sh"]
+
+[tasks."notarize:setup"]
+description = "Store Apple notarization credentials in Keychain (SECCY_APPLE_PASSWORD or interactive prompt)"
+raw = true
+run = "bash pkgs/macos/scripts/notarize-setup.sh"
+
+[tasks.notarize]
+description = "Build, sign, notarize and create target/Seccy-notarized.zip"
+depends = ["package"]
+run = "bash pkgs/macos/scripts/notarize.sh"
 
 
 # Settings #####################################################################

@@ -76,6 +76,6 @@ plutil -insert keychain-access-groups -xml '<array/>' "$entitlements"
 plutil -insert keychain-access-groups.0 -string "$app_id" "$entitlements"
 
 codesign --force --sign "$SECCY_SIGNING_IDENTITY" \
-    --options runtime --entitlements "$entitlements" "$bundle"
+    --timestamp --options runtime --entitlements "$entitlements" "$bundle"
 codesign --verify --strict "$bundle"
 printf '%s\n' "$binaries/seccy"
