@@ -174,6 +174,44 @@ start time, and up to 16 observed ancestors. Missing process details are null or
 absent from the ancestor list. The snapshot is refreshed for each request, with
 a start-time comparison to detect reuse of a previously observed peer PID.
 
+Each process and ancestor also has a `details` object:
+
+- Working directory from `PROC_PIDVNODEPATHINFO`, controlling terminal device
+  number and terminal foreground process group.
+- Containing app bundles (including nested helpers), with names, bundle IDs,
+  versions, builds, executable and icon filenames from their `Info.plist` files.
+  This is filesystem metadata, not a window association or an assertion that
+  all bundle resources were validated.
+- Dynamic code-signing metadata selected by PID: signing identifier, team ID,
+  certificate subject names, code format/flags, ad-hoc and hardened-runtime flags,
+  and the code-directory hash. `validation_status` is the OSStatus from default
+  dynamic identity validation (zero means success). This is not a notarization
+  assessment or proof that the application authorized a request. An ad-hoc
+  signature may validate without identifying a developer.
+- Conservative interpretations of `git`, `ssh`, and `ssh-keygen` arguments:
+  Git subcommand and `-C`/`--git-dir`/`--work-tree` context; SSH destination argument,
+  explicit `-l` username and `-p` port; `ssh-keygen -Y` operation.
+- Repository candidates discovered from the working directory and `.git`
+  directory/worktree markers, or explicit Git directory arguments. These are
+  candidates: environment overrides, SSH configuration, aliases, and wrappers
+  can change actual behavior. No Git commands or hooks are executed to inspect them.
+- Collection source, timestamp, elapsed milliseconds, and notes for unavailable,
+  denied, malformed, or oversized data. If the observed process's start time or
+  executable changes during inspection, its enriched snapshot is discarded.
+
+With `LOG_LEVEL=debug` or `trace`, `details.arguments` contains the complete
+UTF-8 argv array when available. At other levels it is omitted, although selected
+interpreted arguments remain. The parser stops after the kernel-reported argument
+count and never includes trailing process environment entries. Argument arrays
+can contain secrets passed on a command line. Non-UTF-8 or oversized argument
+buffers are reported as unavailable rather than silently altered.
+
+Collection is read-only, with bounded buffers, file sizes, and ancestry depth;
+individual OS/filesystem calls are synchronous, not subject to a hard timeout.
+It does not use Accessibility, window enumeration, screenshots, or automation
+permissions. Full metadata is in `caller_json`; prompts show the useful observed
+context and may be truncated by macOS.
+
 At `debug`/`trace`, a `sign_payload` event additionally contains the **exact bytes
 passed to the signing backend**, encoded as base64 in `fields.payload`, and a
 UTF-8 representation when valid. This includes requests that are later cancelled
@@ -408,7 +446,7 @@ Agent stdout is JSON Lines with `ready`, `signed`, and `request_error` events; S
 
 ## Scope and verification
 
-The kernel identifies the immediate local socket client, usually `ssh` for authentication and `ssh-keygen` for commit signing. Process ancestry is a best-effort OS snapshot, not proof that a parent terminal or IDE authorized the request; processes may exit, reparent, or exec. Names and paths are not verified code-signing identities. We do not infer a repository, remote hostname, or forwarded application from them. A forwarded agent connection can only be attributed to its local forwarding process. Forwarding constraints and session-binding extensions are not implemented.
+The kernel identifies the immediate local socket client, usually `ssh` for authentication and `ssh-keygen` for commit signing. Process ancestry is a best-effort OS snapshot, not proof that a parent terminal or IDE authorized the request; processes may exit, reparent, or exec. Names/paths, code-signing observations, argument-derived context, and repository candidates are reported separately with their sources. Neither ancestry nor a focused application establishes a remote destination or forwarded application's identity. A forwarded agent connection can only be attributed to its local forwarding process. Forwarding constraints and session-binding extensions are not implemented.
 
 The agent accepts same-user clients, advertises only configured keys, bounds frames/connections, serializes signing prompts, and rejects key mutation requests. A process running as your user can request signatures from notification-only keys; this mode is notification, not per-application authorization.
 

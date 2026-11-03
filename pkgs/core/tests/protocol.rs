@@ -2,6 +2,10 @@ use p256::ecdsa::{Signature, SigningKey, signature::Signer};
 use seccy_core::{Caller, Config, Identity, KeyStore, Mode, agent};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+// Keep callsite registration from racing the scoped subscribers in the logging
+// test. The OpenSSH test also invokes these callsites from its agent thread.
+static AGENT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 struct Store {
     key: SigningKey,
     calls: AtomicUsize,
@@ -48,6 +52,7 @@ fn caller() -> Caller {
 
 #[test]
 fn invalid_requests_never_reach_signer() {
+    let _guard = AGENT_TEST_LOCK.lock().unwrap();
     let store = Store::new();
     let keys = vec![store.identity("test", Mode::Notify).unwrap().unwrap()];
     let mut valid = vec![13];
@@ -104,6 +109,7 @@ fn config_is_strict() {
 
 #[test]
 fn debug_logging_contains_exact_payload_but_info_does_not() {
+    let _guard = AGENT_TEST_LOCK.lock().unwrap();
     use base64::{Engine, engine::general_purpose::STANDARD};
     use std::{
         io::Write,
@@ -172,6 +178,7 @@ fn debug_logging_contains_exact_payload_but_info_does_not() {
 #[cfg(unix)]
 #[test]
 fn git_signed_commit_and_openssh_identity_listing() {
+    let _guard = AGENT_TEST_LOCK.lock().unwrap();
     use std::{
         os::unix::net::UnixListener,
         process::Command,

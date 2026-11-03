@@ -384,10 +384,33 @@ fn process_info(pid: i32) -> Option<ProcessInfo> {
         .take_while(|b| **b != 0)
         .map(|b| *b as u8)
         .collect();
+    let path = executable(pid);
+    let details = crate::process::collect(pid, path.as_deref(), info.e_tdev, info.e_tpgid);
+    // Discard enrichment if the PID was recycled while inspecting it.
+    let mut after = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let reread = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            after.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if reread != size {
+        return None;
+    }
+    let after = unsafe { after.assume_init() };
+    if (info.pbi_start_tvsec, info.pbi_start_tvusec)
+        != (after.pbi_start_tvsec, after.pbi_start_tvusec)
+        || path != executable(pid)
+    {
+        return None;
+    }
     Some(ProcessInfo {
         pid,
         parent_pid: info.pbi_ppid as i32,
-        executable: executable(pid),
+        executable: path,
         name: String::from_utf8_lossy(&name).into_owned(),
         uid: info.pbi_uid,
         gid: info.pbi_gid,
@@ -396,6 +419,7 @@ fn process_info(pid: i32) -> Option<ProcessInfo> {
         process_group: info.pbi_pgid,
         start_time_unix_seconds: info.pbi_start_tvsec,
         start_time_microseconds: info.pbi_start_tvusec,
+        details,
     })
 }
 

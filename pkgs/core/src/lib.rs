@@ -145,6 +145,108 @@ pub struct ProcessInfo {
     pub process_group: u32,
     pub start_time_unix_seconds: u64,
     pub start_time_microseconds: u64,
+    pub details: ProcessDetails,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ProcessDetails {
+    pub observed_at_unix_ms: u128,
+    pub collection_duration_ms: u128,
+    pub source: String,
+    pub working_directory: Option<String>,
+    pub terminal_device: Option<u32>,
+    pub terminal_foreground_group: Option<u32>,
+    pub applications: Vec<ApplicationInfo>,
+    pub signing: Option<CodeSigningInfo>,
+    /// Included only when debug logging is enabled. Never includes environment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Vec<String>>,
+    pub command: Option<CommandInfo>,
+    pub repository_candidate: Option<String>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ApplicationInfo {
+    pub source: String,
+    pub bundle_path: String,
+    pub identifier: Option<String>,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub build: Option<String>,
+    pub executable: Option<String>,
+    pub icon_file: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CodeSigningInfo {
+    pub source: String,
+    pub identifier: Option<String>,
+    pub team_identifier: Option<String>,
+    pub format: Option<String>,
+    pub flags: Option<i64>,
+    pub ad_hoc: Option<bool>,
+    pub hardened_runtime: Option<bool>,
+    pub certificate_subjects: Vec<String>,
+    pub cdhash_base64: Option<String>,
+    /// OSStatus from local dynamic validation; zero is success, not notarization.
+    pub validation_status: i32,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct CommandInfo {
+    pub source: String,
+    pub tool: String,
+    pub subcommand: Option<String>,
+    pub destination_argument: Option<String>,
+    pub username_argument: Option<String>,
+    pub port_argument: Option<String>,
+    pub effective_directory_candidate: Option<String>,
+    pub git_directory_argument: Option<String>,
+    pub work_tree_argument: Option<String>,
+}
+
+impl ProcessDetails {
+    fn description(&self) -> String {
+        let mut text = String::new();
+        if let Some(cwd) = &self.working_directory {
+            text.push_str(&format!("\nWorking directory: {cwd:?}"));
+        }
+        if let Some(device) = self.terminal_device {
+            text.push_str(&format!(
+                "\nTerminal device: {device}; foreground group: {:?}",
+                self.terminal_foreground_group
+            ));
+        }
+        for app in &self.applications {
+            text.push_str(&format!(
+                "\nContaining app bundle: {:?}; ID {:?}; version {:?}; path {:?}",
+                app.name, app.identifier, app.version, app.bundle_path
+            ));
+        }
+        if let Some(signing) = &self.signing {
+            text.push_str(&format!(
+                "\nCode signing: ID {:?}; team {:?}; certificates {:?}; local validation OSStatus {}",
+                signing.identifier, signing.team_identifier, signing.certificate_subjects, signing.validation_status
+            ));
+        }
+        if let Some(command) = &self.command {
+            text.push_str(&format!(
+                "\nObserved {} arguments: subcommand {:?}; destination {:?}; user {:?}; port {:?}",
+                command.tool,
+                command.subcommand,
+                command.destination_argument,
+                command.username_argument,
+                command.port_argument
+            ));
+        }
+        if let Some(repo) = &self.repository_candidate {
+            text.push_str(&format!(
+                "\nRepository candidate (filesystem/arguments): {repo:?}"
+            ));
+        }
+        text
+    }
 }
 
 impl Caller {
@@ -155,6 +257,7 @@ impl Caller {
         );
         if let Some(process) = &self.process {
             text.push_str(&format!("\nProcess: {}; effective UID/GID {}/{}; real UID/GID {}/{}; group {}; started {}.{:06}", process.name, process.uid, process.gid, process.real_uid, process.real_gid, process.process_group, process.start_time_unix_seconds, process.start_time_microseconds));
+            text.push_str(&process.details.description());
         }
         for parent in &self.ancestors {
             text.push_str(&format!(
@@ -163,6 +266,7 @@ impl Caller {
                 parent.pid,
                 parent.uid
             ));
+            text.push_str(&parent.details.description());
         }
         text
     }
