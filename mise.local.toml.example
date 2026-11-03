@@ -1,0 +1,4 @@
+[env]
+SECCY_SIGNING_IDENTITY = "Developer ID Application: YOUR_NAME (YOUR_ID)"
+SECCY_BUNDLE_ID = "fyi.seccy.cli"
+SECCY_PROFILE = "/path/to/your/seccy.provisionprofile"

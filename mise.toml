@@ -8,7 +8,7 @@ config_roots = ["pkgs/*"]
 
 # Stack ########################################################################
 
-# ...
+node = "latest"
 
 # Tasks ########################################################################
 
@@ -22,11 +22,28 @@ run = "cargo fmt --all -- --check"
 run = "cargo clippy --workspace --all-targets -- -D warnings"
 
 [tasks.check]
-run = ["cargo fmt --all -- --check", "cargo clippy --workspace --all-targets -- -D warnings"]
-depends = ["//:format:check", "//:lint"]
+depends = ["//:format:check", "//:lint", "//:package:check"]
 
 [tasks.test]
 run = "cargo test --workspace"
+
+[tasks.build]
+run = "cargo build --workspace"
+
+[tasks.release]
+run = "cargo build --release --workspace"
+
+[tasks.run]
+run = "cargo run -p seccy_cli --"
+
+[tasks.package]
+description = "Package and sign the CLI for macOS keychain access (requires SECCY_SIGNING_IDENTITY and SECCY_PROFILE)"
+depends = ["release"]
+run = "bash pkgs/macos/scripts/package.sh"
+
+[tasks."package:check"]
+description = "Check the Bash packaging script syntax"
+run = "bash -n pkgs/macos/scripts/package.sh"
 
 
 # Settings #####################################################################

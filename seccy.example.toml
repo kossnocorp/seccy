@@ -1,0 +1,8 @@
+[user]
+email = "koss@nocorp.me"
+
+[keys.ssh]
+mode = "touchid"
+
+[keys.signing]
+mode = "notify"
