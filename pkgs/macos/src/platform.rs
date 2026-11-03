@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use core_foundation::base::{CFType, TCFType};
 use objc2::rc::Retained;
 use objc2_foundation::NSString;
@@ -18,6 +19,162 @@ use std::{
 };
 
 pub struct SecureEnclave;
+
+const ENCRYPTION_ALGORITHM: Algorithm = Algorithm::ECIESEncryptionCofactorX963SHA256AESGCM;
+pub const MAX_SECRET_BYTES: usize = 64 * 1024;
+const ENVELOPE_PREFIX: &str = "seccy:v1:";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Envelope {
+    algorithm: String,
+    fingerprint: String,
+    ciphertext: String,
+}
+
+fn decode_envelope(value: &str, expected: &Identity) -> Result<Vec<u8>> {
+    ensure!(value.len() <= 128 * 1024, "ciphertext is too large");
+    let encoded = value
+        .strip_prefix(ENVELOPE_PREFIX)
+        .context("unsupported seccy ciphertext format")?;
+    let envelope: Envelope = serde_json::from_slice(
+        &STANDARD
+            .decode(encoded)
+            .context("invalid ciphertext encoding")?,
+    )
+    .map_err(|_| anyhow!("invalid ciphertext envelope"))?;
+    ensure!(
+        envelope.algorithm == "ECIES-P256-X963-SHA256-AESGCM",
+        "unsupported encryption algorithm"
+    );
+    ensure!(
+        envelope.fingerprint == expected.fingerprint,
+        "ciphertext recipient does not match selected key"
+    );
+    let ciphertext = STANDARD
+        .decode(&envelope.ciphertext)
+        .context("invalid encrypted payload encoding")?;
+    ensure!(
+        ciphertext.len() >= 81 && ciphertext.len() <= MAX_SECRET_BYTES + 256,
+        "invalid encrypted payload size"
+    );
+    Ok(ciphertext)
+}
+
+impl SecureEnclave {
+    pub fn crypto_check(&self, expected: &Identity) -> Result<()> {
+        use security_framework_sys::key::{
+            SecKeyIsAlgorithmSupported, kSecKeyOperationTypeDecrypt, kSecKeyOperationTypeEncrypt,
+        };
+        let key = lookup(&expected.name, expected.mode)?.context("key no longer exists")?;
+        ensure!(
+            identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
+            "key changed; restart agent"
+        );
+        let public = key.public_key().context("read public key")?;
+        // SAFETY: live SecKey references; capability queries perform no private operation.
+        let supported = unsafe {
+            SecKeyIsAlgorithmSupported(
+                key.as_concrete_TypeRef(),
+                kSecKeyOperationTypeDecrypt,
+                ENCRYPTION_ALGORITHM.into(),
+            ) != 0
+                && SecKeyIsAlgorithmSupported(
+                    public.as_concrete_TypeRef(),
+                    kSecKeyOperationTypeEncrypt,
+                    ENCRYPTION_ALGORITHM.into(),
+                ) != 0
+        };
+        ensure!(
+            supported,
+            "key does not support ECIES encryption/decryption"
+        );
+        Ok(())
+    }
+
+    /// Public-key encryption requires no biometric authorization.
+    pub fn encrypt(&self, expected: &Identity, plaintext: &[u8]) -> Result<String> {
+        ensure!(plaintext.len() <= MAX_SECRET_BYTES, "secret exceeds 64 KiB");
+        let key = lookup(&expected.name, expected.mode)?.context("key no longer exists")?;
+        ensure!(
+            identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
+            "key changed; restart agent"
+        );
+        let public = key.public_key().context("read public key")?;
+        encrypt_envelope(&public, expected, plaintext)
+    }
+
+    pub fn decrypt(&self, expected: &Identity, value: &str, caller: &Caller) -> Result<Vec<u8>> {
+        let ciphertext = decode_envelope(value, expected)?;
+        let details = format!(
+            "Decrypt secret\nKey: {}\nFingerprint: {}\nMode: {}; algorithm: ECIES P-256/SHA-256/AES-GCM\n{}",
+            expected.name,
+            expected.fingerprint,
+            expected.mode.as_str(),
+            caller.description()
+        );
+        let context = authentication_context(expected.mode, &details);
+        let key = lookup_with_context(&expected.name, expected.mode, as_cf_context(&context))?
+            .context("key no longer exists")?;
+        ensure!(
+            identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
+            "key changed; restart agent"
+        );
+        tracing::info!(event = "decrypt_requested", key = %expected.name, fingerprint = %expected.fingerprint,
+            caller_json = %serde_json::to_string(caller)?);
+        let plaintext = key.decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
+            .map_err(|_| anyhow!("decryption failed: authorization cancelled or unavailable, invalidated key, or damaged ciphertext"))?;
+        ensure!(
+            plaintext.len() <= MAX_SECRET_BYTES,
+            "decrypted secret exceeds 64 KiB"
+        );
+        if expected.mode == Mode::Notify {
+            notify(&details)?;
+            tracing::info!(event = "notification_submitted");
+        }
+        tracing::info!(event = "secret_decrypted", key = %expected.name);
+        Ok(plaintext)
+    }
+}
+
+fn encrypt_envelope(public: &SecKey, expected: &Identity, plaintext: &[u8]) -> Result<String> {
+    ensure!(plaintext.len() <= MAX_SECRET_BYTES, "secret exceeds 64 KiB");
+    let ciphertext = public
+        .encrypt_data(ENCRYPTION_ALGORITHM, plaintext)
+        .map_err(|_| anyhow!("ECIES encryption failed; key or algorithm unavailable"))?;
+    let envelope = Envelope {
+        algorithm: "ECIES-P256-X963-SHA256-AESGCM".into(),
+        fingerprint: expected.fingerprint.clone(),
+        ciphertext: STANDARD.encode(ciphertext),
+    };
+    Ok(format!(
+        "{ENVELOPE_PREFIX}{}",
+        STANDARD.encode(serde_json::to_vec(&envelope)?)
+    ))
+}
+
+fn authentication_context(mode: Mode, details: &str) -> Option<Retained<LAContext>> {
+    if mode != Mode::Touchid {
+        return None;
+    }
+    // SAFETY: this context is confined to one private-key operation.
+    let context = unsafe { LAContext::new() };
+    unsafe {
+        context.setLocalizedReason(&NSString::from_str(&format!(
+            "Authorize key use.\n{details}"
+        )));
+        context.setTouchIDAuthenticationAllowableReuseDuration(0.0);
+        context.setLocalizedFallbackTitle(Some(&NSString::from_str("")));
+    }
+    Some(context)
+}
+
+fn as_cf_context(context: &Option<Retained<LAContext>>) -> Option<CFType> {
+    context.as_ref().map(|context| {
+        // SAFETY: Security.framework accepts LAContext, retained under the get rule.
+        unsafe { CFType::wrap_under_get_rule(Retained::as_ptr(context).cast()) }
+    })
+}
 
 fn label(name: &str, mode: Mode) -> String {
     format!("seccy.v1.{}.{name}", mode.as_str())
@@ -111,25 +268,8 @@ impl KeyStore for SecureEnclave {
         );
         // Fresh context for every signature, attached to the actual key operation.
         // Keychain ACLs still enforce biometryCurrentSet; this only customizes UI.
-        let context = if expected.mode == Mode::Touchid {
-            // SAFETY: a newly allocated context is confined to this operation.
-            let context = unsafe { LAContext::new() };
-            unsafe {
-                context.setLocalizedReason(&NSString::from_str(&format!(
-                    "Authorize key use.\n{details}"
-                )));
-                context.setTouchIDAuthenticationAllowableReuseDuration(0.0);
-                context.setLocalizedFallbackTitle(Some(&NSString::from_str("")));
-            }
-            Some(context)
-        } else {
-            None
-        };
-        let cf_context = context.as_ref().map(|context| {
-            // Security.framework accepts LAContext as a CFType value. Retain
-            // under the get rule; both wrappers own their respective references.
-            unsafe { CFType::wrap_under_get_rule(Retained::as_ptr(context).cast()) }
-        });
+        let context = authentication_context(expected.mode, &details);
+        let cf_context = as_cf_context(&context);
         let key = lookup_with_context(&expected.name, expected.mode, cf_context)?
             .context("key no longer exists")?;
         ensure!(
@@ -262,6 +402,88 @@ fn process_info(pid: i32) -> Option<ProcessInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Ephemeral software keys exercise Apple's actual ECIES implementation without
+    // creating keychain items or claiming to verify Secure Enclave/Touch ID ACLs.
+    fn test_key() -> (SecKey, Identity) {
+        let mut options = GenerateKeyOptions::default();
+        options
+            .set_key_type(KeyType::ec_sec_prime_random())
+            .set_size_in_bits(256);
+        let key = SecKey::new(&options).unwrap();
+        let identity = identity(&key, "test", Mode::Touchid).unwrap();
+        (key, identity)
+    }
+
+    #[test]
+    fn ecies_round_trip_preserves_bytes_and_randomizes_ciphertext() {
+        let (private, identity) = test_key();
+        let public = private.public_key().unwrap();
+        for plaintext in [
+            vec![],
+            b"secret\n\n".to_vec(),
+            vec![0, 255, 128],
+            vec![42; MAX_SECRET_BYTES],
+        ] {
+            let a = encrypt_envelope(&public, &identity, &plaintext).unwrap();
+            let b = encrypt_envelope(&public, &identity, &plaintext).unwrap();
+            assert_ne!(a, b);
+            let encrypted = decode_envelope(&a, &identity).unwrap();
+            assert_eq!(
+                private
+                    .decrypt_data(ENCRYPTION_ALGORITHM, &encrypted)
+                    .unwrap(),
+                plaintext
+            );
+            let mut tampered = encrypted.clone();
+            *tampered.last_mut().unwrap() ^= 1;
+            assert!(
+                private
+                    .decrypt_data(ENCRYPTION_ALGORITHM, &tampered)
+                    .is_err()
+            );
+        }
+        assert!(encrypt_envelope(&public, &identity, &vec![0; MAX_SECRET_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn envelopes_reject_wrong_key_versions_algorithms_and_malformed_input() {
+        let (private, identity) = test_key();
+        let (other, other_identity) = test_key();
+        let value = encrypt_envelope(&private.public_key().unwrap(), &identity, b"secret").unwrap();
+        assert!(decode_envelope(&value, &other_identity).is_err());
+        assert!(
+            other
+                .decrypt_data(
+                    ENCRYPTION_ALGORITHM,
+                    &decode_envelope(&value, &identity).unwrap()
+                )
+                .is_err()
+        );
+        assert!(decode_envelope(&value.replacen("v1", "v2", 1), &identity).is_err());
+        for invalid in ["", "seccy:v1:!", "seccy:v1:e30="] {
+            assert!(decode_envelope(invalid, &identity).is_err());
+        }
+        let mut envelope: serde_json::Value = serde_json::from_slice(
+            &STANDARD
+                .decode(value.strip_prefix(ENVELOPE_PREFIX).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        envelope["algorithm"] = serde_json::json!("other");
+        let invalid = format!(
+            "{ENVELOPE_PREFIX}{}",
+            STANDARD.encode(serde_json::to_vec(&envelope).unwrap())
+        );
+        assert!(decode_envelope(&invalid, &identity).is_err());
+        envelope["sensitive-untrusted-field"] = serde_json::json!("do-not-log");
+        let invalid = format!(
+            "{ENVELOPE_PREFIX}{}",
+            STANDARD.encode(serde_json::to_vec(&envelope).unwrap())
+        );
+        let error = decode_envelope(&invalid, &identity).unwrap_err();
+        assert!(!format!("{error:#}").contains("sensitive-untrusted-field"));
+    }
 
     #[test]
     fn process_snapshot_matches_current_process() {

@@ -1,5 +1,6 @@
 [workspace]
 members = ["pkgs/*"]
+exclude = ["pkgs/fnox"]
 resolver = "3"
 
 [workspace.package]

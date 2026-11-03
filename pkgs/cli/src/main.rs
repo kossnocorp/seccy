@@ -6,6 +6,8 @@ use usage_rs::{Args, Cli, Subcommands};
 
 mod logging;
 #[cfg(target_os = "macos")]
+mod secrets;
+#[cfg(target_os = "macos")]
 mod server;
 
 /// Secure Enclave SSH authentication and Git signing
@@ -34,6 +36,12 @@ enum Commands {
     Sync(Empty),
     /// Run the SSH agent in the foreground
     Agent(AgentArgs),
+    /// Encrypt stdin with a configured public key (64 KiB maximum)
+    Encrypt(KeyArgs),
+    /// Decrypt ciphertext from stdin through the running agent
+    Decrypt(SecretArgs),
+    /// Check the running agent and selected encryption key without Touch ID
+    CryptoCheck(SecretArgs),
 }
 
 #[derive(Args)]
@@ -48,6 +56,15 @@ struct KeyArgs {
 #[derive(Args)]
 struct AgentArgs {
     /// Socket path; parent directory must be private and owned by you
+    #[usage(long)]
+    socket: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct SecretArgs {
+    /// Configured key name
+    name: String,
+    /// Secrets socket (defaults to the agent's secrets.sock)
     #[usage(long)]
     socket: Option<PathBuf>,
 }
@@ -185,6 +202,24 @@ fn run_platform(app: App, config: Config) -> Result<()> {
             );
         }
         Commands::Agent(args) => server::run(config, args.socket, app.json)?,
+        Commands::Encrypt(args) => {
+            use anyhow::Context;
+            let key = config
+                .keys
+                .get(&args.name)
+                .context("key is not configured")?;
+            let identity = store
+                .identity(&args.name, key.mode)?
+                .context("key is not provisioned")?;
+            let input = secrets::read_stdin(seccy_macos::MAX_SECRET_BYTES)?;
+            let value = store.encrypt(&identity, &input)?;
+            emit(app.json, json!({"ok": true, "value": value}), &value);
+        }
+        Commands::Decrypt(args) => secrets::decrypt(args, app.json)?,
+        Commands::CryptoCheck(args) => {
+            let value = secrets::request(args.socket, "check", &args.name, None)?;
+            emit(app.json, value, "Encryption key and agent are ready");
+        }
     }
     Ok(())
 }

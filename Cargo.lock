@@ -525,11 +525,13 @@ name = "seccy_cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "ctrlc",
  "fs2",
  "libc",
  "seccy_core",
  "seccy_macos",
+ "serde",
  "serde_json",
  "tempfile",
  "tracing",
@@ -558,6 +560,7 @@ name = "seccy_macos"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "core-foundation",
  "libc",
  "objc2",
@@ -566,6 +569,8 @@ dependencies = [
  "seccy_core",
  "security-framework",
  "security-framework-sys",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 

@@ -7,6 +7,7 @@ Config-driven Secure Enclave SSH agent and CLI, written in Rust with [usage](htt
 - `touchid`: hardware-enforced biometric authorization for private-key operations.
 - `notify`: no biometric prompt; send a macOS notification identifying the key and local client executable/PID after signing.
 - `--json`: machine-readable command results and errors; newline-delimited events for the foreground agent.
+- `encrypt` / `decrypt`: authenticated encryption with a selected Secure Enclave key, including a fnox Lua provider.
 
 ## Build
 
@@ -26,6 +27,7 @@ Workspace:
 | `pkgs/core` / `seccy_core` | Strict TOML config, key-store interface, SSH wire protocol and public-key encoding; portable to Linux |
 | `pkgs/macos` / `seccy_macos` | Security.framework Secure Enclave access, biometric ACLs, notifications, socket peer identification |
 | `pkgs/cli` / `seccy_cli` | `seccy` executable, usage command definitions, JSON output, Unix socket agent |
+| `pkgs/fnox` | fnox Lua encryption provider (not a Rust crate) |
 
 ## macOS packaging
 
@@ -130,6 +132,7 @@ Changing an existing key's mode is rejected: choose a new name and register its 
 | --- | --- | --- |
 | Public keys | `$XDG_DATA_HOME/seccy/keys/<name>.pub` | `~/.local/share/seccy/keys/<name>.pub` |
 | Agent socket | `$XDG_RUNTIME_DIR/seccy/agent.sock` | When unset: `$XDG_CACHE_HOME/seccy/run/agent.sock`, default `~/.cache/seccy/run/agent.sock` |
+| Secrets socket | Alongside the agent socket, named `secrets.sock` | `~/.cache/seccy/run/secrets.sock` when runtime/cache overrides are unset |
 | Provision/sync lock | `$XDG_STATE_HOME/seccy/provision.lock` | `~/.local/state/seccy/provision.lock` |
 
 Relative XDG values are ignored, as required by the XDG specification. Socket and lock directories are owner-only. Existing `~/.seccy` sockets are no longer used. Public files can be regenerated with `sync`; private keys remain in the keychain. The config path still defaults to `./seccy.toml`.
@@ -277,6 +280,121 @@ For local verification, create an allowed-signers file containing `your@email.ex
 git config --global gpg.ssh.allowedSignersFile /absolute/path/to/allowed_signers
 git verify-commit HEAD
 ```
+
+## Encryption and fnox
+
+seccy uses Apple's **ECIES P-256 / X9.63 SHA-256 / AES-GCM** implementation.
+Encryption uses the public key without Touch ID. Decryption uses the private key
+in the Secure Enclave, with the same `touchid` or `notify` policy as signing.
+Existing keys can be selected; a dedicated key makes secret-key rotation independent
+of SSH key rotation:
+
+```toml
+# Add to your seccy.toml
+[keys.secrets]
+mode = "touchid"
+```
+
+Build/package the updated signed application as described above, then provision
+and start (or restart) its agent with an explicit config path:
+
+```sh
+seccy --config "$HOME/.config/seccy/seccy.toml" provision
+seccy --config "$HOME/.config/seccy/seccy.toml" agent
+```
+
+The agent opens both SSH and secrets sockets. Private-key operations share one
+lock, so SSH and decryption prompts are serialized. `--socket` on `agent` selects
+the SSH socket; the secrets socket is always `secrets.sock` in the same directory.
+Its path is included as `secrets_socket` in the JSON `ready` event.
+
+### CLI
+
+```sh
+seccy --config "$HOME/.config/seccy/seccy.toml" encrypt secrets < secret.txt > secret.enc
+seccy decrypt secrets < secret.enc > recovered.txt
+seccy crypto-check secrets --json
+```
+
+`encrypt` reads up to 64 KiB of arbitrary bytes from stdin and emits one versioned
+`seccy:v1:...` ciphertext string. It requires the configured, provisioned key but
+does not require a running agent. `decrypt` reads ciphertext from stdin and writes
+the exact plaintext bytes without adding a newline. It uses the running agent's
+configured keys; `--config` does not change the agent's configuration. Both
+`decrypt` and `crypto-check` accept `--socket /absolute/path/to/secrets.sock`.
+
+`crypto-check` verifies agent connectivity, key presence, and ECIES capability
+without decrypting or prompting. To verify actual private-key authorization, run
+the round-trip above and compare with `cmp secret.txt recovered.txt`; repeat the
+decryption to check fresh Touch ID prompts, and cancel a prompt to verify failure.
+
+JSON encryption returns `{"ok":true,"value":"seccy:v1:..."}`. JSON decryption
+returns `{"ok":true,"value_base64":"..."}` to preserve binary data and trailing
+newlines. Ciphertext includes its recipient fingerprint: a replacement key with
+the same name cannot decrypt old values.
+
+### fnox setup
+
+Use **fnox 1.47.0 or newer**, with the Lua provider API described in the
+[fnox documentation](https://fnox.jdx.dev/providers/lua.html). The plugin lives at
+`pkgs/fnox/provider.lua`. Link this checkout for local development:
+
+```sh
+fnox plugin link seccy /absolute/path/to/seccy/pkgs/fnox
+```
+
+Add this to `fnox.toml` (replace paths with your actual installation paths):
+
+```toml
+default_provider = "seccy"
+if_missing = "error"
+env = "exec"
+
+[providers.seccy]
+type = "lua"
+plugin = "seccy"
+daemon_cache = false
+
+[providers.seccy.options]
+key = "secrets"
+bin = "/absolute/path/to/Seccy.app/Contents/MacOS/seccy"
+config = "/absolute/path/to/seccy.toml"
+# Optional, when the agent uses a custom secrets socket:
+# socket = "/absolute/path/to/secrets.sock"
+```
+
+Alternatively set `plugin = "/absolute/path/to/seccy/pkgs/fnox"` directly.
+`bin` defaults to `seccy` on PATH. Use absolute `bin`, `config`, and `socket` option
+paths: Lua option paths do not receive fnox's config-relative path resolution or
+shell `~` expansion. The executable must stay inside its signed app bundle.
+
+```sh
+fnox provider test seccy
+fnox set API_TOKEN --provider seccy --from-file /path/to/token.txt
+fnox exec -- ./your-app
+```
+
+fnox stores ciphertext in its config. The plugin passes data through stdin and
+JSON stdout, never shell interpolation or secret-bearing command arguments.
+Batch reads run sequentially; **each secret decryption requires its own Touch ID
+authorization** for `touchid` keys. Keep `daemon_cache = false` to prevent later
+commands receiving cached plaintext without a fresh key operation. Avoid fallback
+defaults for secrets that must fail when authorization fails.
+
+Decryption audit events include the key and local caller metadata, never plaintext
+or encryption keys, even at debug/trace. fnox and the launched program necessarily
+receive plaintext after authorization. Notification-only keys retain their existing
+same-user access model. The immediate socket client is seccy; fnox appears in
+best-effort process ancestry.
+
+**Recovery:** this initial format has a single recipient. Loss of the Mac/key or
+invalidation by biometric enrollment changes makes its ciphertext unrecoverable.
+Keep a separate source of truth for secrets, and reencrypt while the old key is
+still usable when rotating. There is no private-key export or recovery recipient.
+
+Adapter tests can be run with `lua pkgs/fnox/test.lua` (or `luajit`). Rust tests
+exercise ECIES with ephemeral software test keys; Secure Enclave ACLs, Touch ID,
+and notification delivery must also be checked with the signed app on hardware.
 
 ## JSON contract
 

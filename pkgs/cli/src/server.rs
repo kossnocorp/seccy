@@ -73,19 +73,16 @@ pub fn run(config: Config, socket: Option<PathBuf>, json_mode: bool) -> Result<(
             .context("socket must have a parent directory")?,
     )?;
     let _lock = lock(&socket.with_extension("lock"))?;
-    if let Ok(meta) = fs::symlink_metadata(&socket) {
-        ensure!(
-            meta.file_type().is_socket() && meta.uid() == unsafe { libc::geteuid() },
-            "refusing to replace non-owned socket path"
-        );
-        match UnixStream::connect(&socket) {
-            Ok(_) => anyhow::bail!("an agent is already listening on {}", socket.display()),
-            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
-                fs::remove_file(&socket)?
-            }
-            Err(e) => return Err(e).context("check existing socket"),
-        }
-    }
+    let secrets_socket = socket.with_file_name("secrets.sock");
+    ensure!(
+        socket != secrets_socket,
+        "SSH socket cannot be named secrets.sock"
+    );
+    let _secrets_lock = lock(&secrets_socket.with_extension("lock"))?;
+    let listener = bind(&socket)?;
+    let _socket_guard = SocketGuard(socket.clone());
+    let secrets_listener = bind(&secrets_socket)?;
+    let _secrets_guard = SocketGuard(secrets_socket.clone());
     let keys = Arc::new(
         config
             .keys
@@ -97,47 +94,71 @@ pub fn run(config: Config, socket: Option<PathBuf>, json_mode: bool) -> Result<(
             .map(|identity| identity.with_user(&config.user))
             .collect::<Vec<_>>(),
     );
-    let listener = UnixListener::bind(&socket).context("bind agent socket")?;
-    let _socket_guard = SocketGuard(socket.clone());
-    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
-    listener.set_nonblocking(true)?;
     let stopped = Arc::new(AtomicBool::new(false));
     let signal = stopped.clone();
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))?;
     let active = Arc::new(AtomicUsize::new(0));
     let signing = Arc::new(Mutex::new(()));
-    tracing::info!(event = "agent_ready", socket = %socket.display(), key_count = keys.len());
+    tracing::info!(event = "agent_ready", socket = %socket.display(), secrets_socket = %secrets_socket.display(), key_count = keys.len());
     super::emit(
         json_mode,
-        json!({"ok": true, "event": "ready", "socket": socket}),
-        &format!("SSH_AUTH_SOCK={}", socket.display()),
+        json!({"ok": true, "event": "ready", "socket": socket, "secrets_socket": secrets_socket}),
+        &format!(
+            "SSH_AUTH_SOCK={}\nSecrets socket: {}",
+            socket.display(),
+            secrets_socket.display()
+        ),
     );
     while !stopped.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                if active.load(Ordering::Relaxed) >= 16 {
-                    tracing::warn!(event = "connection_limit_reached");
-                    continue;
-                }
-                active.fetch_add(1, Ordering::Relaxed);
-                let active = active.clone();
-                let keys = keys.clone();
-                let signing = signing.clone();
-                std::thread::spawn(move || {
-                    if let Err(error) = serve(stream, &keys, &signing, json_mode) {
-                        event_error(json_mode, &error);
+        for (listener, secrets) in [(&listener, false), (&secrets_listener, true)] {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    if active.load(Ordering::Relaxed) >= 16 {
+                        tracing::warn!(event = "connection_limit_reached");
+                        continue;
                     }
-                    active.fetch_sub(1, Ordering::Relaxed);
-                });
+                    active.fetch_add(1, Ordering::Relaxed);
+                    let active = active.clone();
+                    let keys = keys.clone();
+                    let signing = signing.clone();
+                    std::thread::spawn(move || {
+                        let result = if secrets {
+                            super::secrets::serve(stream, &keys, &signing)
+                        } else {
+                            serve(stream, &keys, &signing, json_mode)
+                        };
+                        if let Err(error) = result {
+                            event_error(json_mode, &error);
+                        }
+                        active.fetch_sub(1, Ordering::Relaxed);
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => (),
+                Err(e) => return Err(e.into()),
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(50))
-            }
-            Err(e) => return Err(e.into()),
         }
+        std::thread::sleep(Duration::from_millis(10));
     }
     tracing::info!(event = "agent_stopped");
     Ok(())
+}
+
+fn bind(socket: &Path) -> Result<UnixListener> {
+    if let Ok(meta) = fs::symlink_metadata(socket) {
+        ensure!(
+            meta.file_type().is_socket() && meta.uid() == unsafe { libc::geteuid() },
+            "refusing to replace non-owned socket path"
+        );
+        match UnixStream::connect(socket) {
+            Ok(_) => anyhow::bail!("an agent is already listening on {}", socket.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => fs::remove_file(socket)?,
+            Err(e) => return Err(e).context("check existing socket"),
+        }
+    }
+    let listener = UnixListener::bind(socket).context("bind agent socket")?;
+    fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
 }
 
 fn event_error(json_mode: bool, error: &anyhow::Error) {
