@@ -26,7 +26,13 @@ impl KeyStore for Store {
         )
         .map(Some)
     }
-    fn sign(&self, _: &Identity, message: &[u8], _: &Caller) -> anyhow::Result<Vec<u8>> {
+    fn sign(
+        &self,
+        _: &Identity,
+        message: &[u8],
+        _: &Caller,
+        _: &seccy_core::payload::Payload,
+    ) -> anyhow::Result<Vec<u8>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let signature: Signature = self.key.sign(message);
         Ok(signature.to_der().as_bytes().to_vec())

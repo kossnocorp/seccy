@@ -22,7 +22,13 @@ impl KeyStore for Store {
         )
         .map(Some)
     }
-    fn sign(&self, _: &Identity, _: &[u8], _: &Caller) -> Result<Vec<u8>> {
+    fn sign(
+        &self,
+        _: &Identity,
+        _: &[u8],
+        _: &Caller,
+        _: &seccy_core::payload::Payload,
+    ) -> Result<Vec<u8>> {
         unreachable!()
     }
 }

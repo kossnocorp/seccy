@@ -93,9 +93,16 @@ impl KeyStore for SecureEnclave {
             .transpose()
     }
 
-    fn sign(&self, expected: &Identity, message: &[u8], caller: &Caller) -> Result<Vec<u8>> {
+    fn sign(
+        &self,
+        expected: &Identity,
+        message: &[u8],
+        caller: &Caller,
+        payload: &seccy_core::payload::Payload,
+    ) -> Result<Vec<u8>> {
         let details = format!(
-            "Key: {}\nFingerprint: {}\nMode: {}; algorithm: ECDSA P-256/SHA-256; payload: {} bytes\n{}",
+            "{}\nKey: {}\nFingerprint: {}\nMode: {}; algorithm: ECDSA P-256/SHA-256; payload: {} bytes\n{}",
+            payload.description(),
             expected.name,
             expected.fingerprint,
             expected.mode.as_str(),

@@ -190,6 +190,50 @@ payload, backend failure, and signature-creation events. `signature_created`
 means the backend produced a signature; `signature_delivered` means it was
 written to the client socket. Neither proves a server accepted authentication.
 
+### Decoded signing context and known hosts
+
+Prompts, notifications, and the `sign_requested` log's `payload_json` field
+include a best-effort decoding of the request:
+
+- **SSH authentication:** remote username, service, method, algorithm, session
+  identifier (in logs), and the server host-key algorithm/fingerprint when the
+  request uses OpenSSH host-bound authentication.
+- **SSH signatures:** namespace (for example, `git`), hash algorithm, and the
+  document digest (in logs). The repository, commit message, and document content
+  cannot be recovered from that digest.
+- **Unknown:** malformed, unsupported, or opaque payloads retain the generic
+  signing description. Decoding doesn't change the bytes signed or reject an
+  otherwise valid agent signing request.
+
+For host-bound requests, seccy matches the **entire embedded host public key**
+against `~/.ssh/known_hosts`, `~/.ssh/known_hosts2`, `/etc/ssh/ssh_known_hosts`, and
+`/etc/ssh/ssh_known_hosts2`. Matching names/patterns, source files, and line numbers
+are shown. Multiple aliases and `[host]:port` entries are preserved. Hashed-host
+entries can be recognized by their public key, but their hostnames cannot be
+recovered. `@revoked` matches are explicitly labeled; `@cert-authority` entries
+are not treated as direct server-key matches.
+
+These are local **key associations**, not proof of the actual destination:
+payloads are client-supplied and one server key may be shared by many hosts.
+This lookup does not replace SSH's host-key verification. No DNS or network
+lookups are performed, and seccy does not parse `ssh_config` or run its commands.
+For custom known-hosts locations, set a colon-separated list of absolute paths:
+
+```sh
+SECCY_KNOWN_HOSTS="$HOME/.ssh/known_hosts:/path/to/company_known_hosts" \
+  seccy --config ~/.config/seccy/seccy.toml agent
+```
+
+This replaces the default list (up to 16 files). Missing files are ignored;
+unreadable/non-regular files and files larger than 4 MiB are skipped with lookup
+notes. At most 64 key matches are retained. Files are reread for each request.
+
+macOS controls the Touch ID window's layout, typography, size, and biometric
+controls. `LAContext` lets us set the reason and cancel/fallback labels and control
+authentication reuse. It does not provide custom fields or extra action buttons.
+The application name/icon come from the app bundle. Long descriptions may be
+truncated by macOS; logs retain the complete decoded information.
+
 ## SSH / Git transport
 
 In another terminal:

@@ -1,5 +1,6 @@
 //! Portable configuration, key-store interface, and OpenSSH agent protocol.
 pub mod agent;
+pub mod payload;
 pub mod storage;
 
 use anyhow::{Context, Result, ensure};
@@ -171,5 +172,11 @@ impl Caller {
 pub trait KeyStore {
     fn provision(&self, name: &str, mode: Mode) -> Result<(Identity, bool)>;
     fn identity(&self, name: &str, mode: Mode) -> Result<Option<Identity>>;
-    fn sign(&self, identity: &Identity, message: &[u8], caller: &Caller) -> Result<Vec<u8>>;
+    fn sign(
+        &self,
+        identity: &Identity,
+        message: &[u8],
+        caller: &Caller,
+        payload: &payload::Payload,
+    ) -> Result<Vec<u8>>;
 }

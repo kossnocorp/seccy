@@ -97,14 +97,16 @@ pub fn respond(
             let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
             let span = tracing::info_span!("sign", request_id, agent_pid = std::process::id(), key = %key.name, fingerprint = %key.fingerprint);
             let _entered = span.enter();
+            let mut payload = crate::payload::Payload::decode(message, &key.blob);
+            payload.enrich(&crate::payload::known_hosts_files());
             tracing::info!(event = "sign_requested", mode = key.mode.as_str(), algorithm = "ecdsa-sha2-nistp256", flags = 0,
                 payload_length = message.len(), payload_sha256 = %STANDARD.encode(Sha256::digest(message)),
-                caller_json = %serde_json::to_string(caller)?);
+                caller_json = %serde_json::to_string(caller)?, payload_json = %serde_json::to_string(&payload)?);
             if tracing::enabled!(tracing::Level::DEBUG) {
                 tracing::debug!(event = "sign_payload", encoding = "base64", payload = %STANDARD.encode(message),
                     utf8 = ?std::str::from_utf8(message).ok());
             }
-            let der = match store.sign(key, message, caller) {
+            let der = match store.sign(key, message, caller, &payload) {
                 Ok(signature) => signature,
                 Err(error) => {
                     tracing::error!(event = "sign_failed", error = %format!("{error:#}"));
