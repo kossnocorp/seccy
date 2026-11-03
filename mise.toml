@@ -1,0 +1,36 @@
+# Monorepo #####################################################################
+
+monorepo_root = true
+[monorepo]
+config_roots = ["pkgs/*"]
+
+[tools]
+
+# Stack ########################################################################
+
+# ...
+
+# Tasks ########################################################################
+
+[tasks.format]
+run = "cargo fmt --all"
+
+[tasks."format:check"]
+run = "cargo fmt --all -- --check"
+
+[tasks.lint]
+run = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[tasks.check]
+run = ["cargo fmt --all -- --check", "cargo clippy --workspace --all-targets -- -D warnings"]
+depends = ["//:format:check", "//:lint"]
+
+[tasks.test]
+run = "cargo test --workspace"
+
+
+# Settings #####################################################################
+
+[settings]
+lockfile = true
+idiomatic_version_file_enable_tools = ["rust"] # Use rust-toolchain.toml
