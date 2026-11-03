@@ -106,6 +106,7 @@ pub fn run(config: Config, socket: Option<PathBuf>, json_mode: bool) -> Result<(
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))?;
     let active = Arc::new(AtomicUsize::new(0));
     let signing = Arc::new(Mutex::new(()));
+    tracing::info!(event = "agent_ready", socket = %socket.display(), key_count = keys.len());
     super::emit(
         json_mode,
         json!({"ok": true, "event": "ready", "socket": socket}),
@@ -115,6 +116,7 @@ pub fn run(config: Config, socket: Option<PathBuf>, json_mode: bool) -> Result<(
         match listener.accept() {
             Ok((stream, _)) => {
                 if active.load(Ordering::Relaxed) >= 16 {
+                    tracing::warn!(event = "connection_limit_reached");
                     continue;
                 }
                 active.fetch_add(1, Ordering::Relaxed);
@@ -134,10 +136,12 @@ pub fn run(config: Config, socket: Option<PathBuf>, json_mode: bool) -> Result<(
             Err(e) => return Err(e.into()),
         }
     }
+    tracing::info!(event = "agent_stopped");
     Ok(())
 }
 
 fn event_error(json_mode: bool, error: &anyhow::Error) {
+    tracing::error!(event = "request_error", error = %format!("{error:#}"));
     if json_mode {
         println!(
             "{}",
@@ -158,7 +162,8 @@ fn serve(
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(120)))?;
     stream.set_write_timeout(Some(Duration::from_secs(120)))?;
-    let caller = seccy_macos::caller(&stream)?;
+    let connected = seccy_macos::caller(&stream)?;
+    tracing::info!(event = "client_connected", caller_json = %serde_json::to_string(&connected)?);
     while let Some(request) = agent::read_frame(&mut stream)? {
         // Serialize biometric prompts and notification delivery across clients.
         let _guard = if request.first() == Some(&13) {
@@ -170,6 +175,17 @@ fn serve(
         } else {
             None
         };
+        let caller = seccy_macos::caller(&stream)?;
+        ensure!(caller.pid == connected.pid, "socket peer changed");
+        if let (Some(before), Some(now)) = (&connected.process, &caller.process) {
+            ensure!(
+                (
+                    before.start_time_unix_seconds,
+                    before.start_time_microseconds
+                ) == (now.start_time_unix_seconds, now.start_time_microseconds),
+                "socket peer PID was reused"
+            );
+        }
         let response = match agent::respond(&seccy_macos::SecureEnclave, keys, &caller, &request) {
             Ok(response) => response,
             Err(error) => {
@@ -178,6 +194,12 @@ fn serve(
             }
         };
         agent::write_frame(&mut stream, &response)?;
+        tracing::debug!(
+            event = "agent_response",
+            request_type = request[0],
+            response_type = response[0],
+            peer_pid = caller.pid
+        );
         if response.first() == Some(&14) {
             // A successful response means the request was fully validated.
             // Its key blob starts after the message type and string length.
@@ -185,6 +207,7 @@ fn serve(
                 .iter()
                 .find(|key| request.get(5..5 + key.blob.len()) == Some(key.blob.as_slice()))
                 .context("signed key missing from advertised identities")?;
+            tracing::info!(event = "signature_delivered", key = %key.name, fingerprint = %key.fingerprint, peer_pid = caller.pid);
             if json_mode {
                 println!(
                     "{}",
@@ -198,5 +221,6 @@ fn serve(
             }
         }
     }
+    tracing::info!(event = "client_disconnected", peer_pid = connected.pid);
     Ok(())
 }

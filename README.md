@@ -136,7 +136,59 @@ Relative XDG values are ignored, as required by the XDG specification. Socket an
 
 Touch ID uses `biometryCurrentSet` plus `privateKeyUsage`: password fallback is not enabled, and changing enrolled fingerprints invalidates access. Notification-only keys use `privateKeyUsage`. Both modes require an unlocked device and use device-only keychain protection.
 
-Notifications are submitted via `/usr/bin/osascript`; enable notifications for that sender in macOS. macOS notification settings and Focus can suppress banners. Failure to submit a notification causes the agent to withhold the signature. Agent events also record successful signature responses. No signing payloads or private material are logged.
+Notifications are submitted via `/usr/bin/osascript`; enable notifications for that sender in macOS. macOS notification settings and Focus can suppress banners. Failure to submit a notification causes the agent to withhold the signature. Agent events also record successful signature responses.
+
+Both notifications and Touch ID's custom authentication reason include the key
+name/fingerprint/mode, signature algorithm, payload size, client executable/PID,
+socket-peer UID/GID, and available process metadata and ancestry. macOS can
+truncate long UI text; the file log contains the complete metadata. Each Touch ID
+operation uses a fresh `LAContext` with biometric reuse disabled and the reason
+attached to the actual keychain signing operation.
+
+### File logging and payload inspection
+
+`LOG_LEVEL` accepts `off`, `error`, `warn`, `info` (default), `debug`, or `trace`.
+Logs are appended as JSON Lines to:
+
+```text
+$XDG_STATE_HOME/seccy/logs/seccy.jsonl
+# Default: ~/.local/state/seccy/logs/seccy.jsonl
+```
+
+The directory is private (`0700`) and the log file is `0600`. Logs are separate
+from CLI stdout, so `--json` keeps its existing contract. The file is append-only
+and is not automatically rotated; stop the agent before moving/removing it.
+
+```sh
+LOG_LEVEL=debug seccy --config ~/.config/seccy/seccy.toml agent --json
+tail -f ~/.local/state/seccy/logs/seccy.jsonl
+```
+
+At `info`, signing requests record the key, algorithm, flags, byte count, SHA-256
+digest (base64), and `caller_json`: a JSON-encoded snapshot with peer PID/path,
+peer UID/GID, process name, effective/real UID/GID, parent PID, process group,
+start time, and up to 16 observed ancestors. Missing process details are null or
+absent from the ancestor list. The snapshot is refreshed for each request, with
+a start-time comparison to detect reuse of a previously observed peer PID.
+
+At `debug`/`trace`, a `sign_payload` event additionally contains the **exact bytes
+passed to the signing backend**, encoded as base64 in `fields.payload`, and a
+UTF-8 representation when valid. This includes requests that are later cancelled
+or fail. Private key material is never exported or logged. Debug payloads can
+contain authentication/signing context; use `info` to omit the raw bytes.
+
+For example, extract the latest payload using `jq` and macOS `base64`:
+
+```sh
+jq -r 'select(.fields.event == "sign_payload") | .fields.payload' \
+  ~/.local/state/seccy/logs/seccy.jsonl | tail -n 1 | base64 -D > payload.bin
+hexdump -C payload.bin
+```
+
+The `sign` span carries `agent_pid` and `request_id` to correlate request,
+payload, backend failure, and signature-creation events. `signature_created`
+means the backend produced a signature; `signature_delivered` means it was
+written to the client socket. Neither proves a server accepted authentication.
 
 ## SSH / Git transport
 
@@ -194,7 +246,7 @@ Agent stdout is JSON Lines with `ready`, `signed`, and `request_error` events; S
 
 ## Scope and verification
 
-The kernel identifies the immediate local socket client, usually `ssh` for authentication and `ssh-keygen` for commit signing. This is not an attribution to a parent terminal, IDE, repository, remote host, or forwarded application. A forwarded agent connection can only be attributed to its local forwarding process. Forwarding constraints and session-binding extensions are not implemented.
+The kernel identifies the immediate local socket client, usually `ssh` for authentication and `ssh-keygen` for commit signing. Process ancestry is a best-effort OS snapshot, not proof that a parent terminal or IDE authorized the request; processes may exit, reparent, or exec. Names and paths are not verified code-signing identities. We do not infer a repository, remote hostname, or forwarded application from them. A forwarded agent connection can only be attributed to its local forwarding process. Forwarding constraints and session-binding extensions are not implemented.
 
 The agent accepts same-user clients, advertises only configured keys, bounds frames/connections, serializes signing prompts, and rejects key mutation requests. A process running as your user can request signatures from notification-only keys; this mode is notification, not per-application authorization.
 

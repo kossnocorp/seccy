@@ -120,10 +120,51 @@ impl Identity {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Caller {
     pub pid: i32,
     pub executable: String,
+    pub peer_uid: u32,
+    pub peer_gid: u32,
+    pub process: Option<ProcessInfo>,
+    /// Best-effort OS snapshots, nearest parent first; not authenticated origins.
+    pub ancestors: Vec<ProcessInfo>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ProcessInfo {
+    pub pid: i32,
+    pub parent_pid: i32,
+    pub executable: Option<String>,
+    pub name: String,
+    pub uid: u32,
+    pub gid: u32,
+    pub real_uid: u32,
+    pub real_gid: u32,
+    pub process_group: u32,
+    pub start_time_unix_seconds: u64,
+    pub start_time_microseconds: u64,
+}
+
+impl Caller {
+    pub fn description(&self) -> String {
+        let mut text = format!(
+            "{} (PID {}, peer UID {}, GID {})",
+            self.executable, self.pid, self.peer_uid, self.peer_gid
+        );
+        if let Some(process) = &self.process {
+            text.push_str(&format!("\nProcess: {}; effective UID/GID {}/{}; real UID/GID {}/{}; group {}; started {}.{:06}", process.name, process.uid, process.gid, process.real_uid, process.real_gid, process.process_group, process.start_time_unix_seconds, process.start_time_microseconds));
+        }
+        for parent in &self.ancestors {
+            text.push_str(&format!(
+                "\nObserved ancestor: {} (PID {}, UID {})",
+                parent.executable.as_deref().unwrap_or(&parent.name),
+                parent.pid,
+                parent.uid
+            ));
+        }
+        text
+    }
 }
 
 /// Implementations return ASN.1 DER ECDSA signatures over SHA-256(message).

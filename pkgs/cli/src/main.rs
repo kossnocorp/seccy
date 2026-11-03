@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use usage_rs::{Args, Cli, Subcommands};
 
+mod logging;
 #[cfg(target_os = "macos")]
 mod server;
 
@@ -87,6 +88,7 @@ fn main() {
         }
     };
     if let Err(error) = run(app) {
+        tracing::error!(event = "command_failed", error = %format!("{error:#}"));
         if json_mode {
             emit(
                 true,
@@ -101,6 +103,8 @@ fn main() {
 }
 
 fn run(app: App) -> Result<()> {
+    logging::init()?;
+    tracing::info!(event = "command_started", config = %app.config.display());
     let config = Config::load(&app.config)?;
     run_platform(app, config)
 }

@@ -2,7 +2,12 @@
 //! extensions are deliberately unsupported.
 use crate::{Caller, Identity, KeyStore};
 use anyhow::{Context, Result, bail, ensure};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 pub const ALGORITHM: &[u8] = b"ecdsa-sha2-nistp256";
 pub const MAX_FRAME: usize = 256 * 1024;
@@ -67,6 +72,11 @@ pub fn respond(
     match r.take(1)?[0] {
         11 => {
             r.end()?;
+            tracing::debug!(
+                event = "identities_requested",
+                count = keys.len(),
+                peer_pid = caller.pid
+            );
             let mut out = vec![12];
             out.extend_from_slice(&(keys.len() as u32).to_be_bytes());
             for key in keys {
@@ -84,7 +94,24 @@ pub fn respond(
                 .iter()
                 .find(|k| k.blob == blob)
                 .context("unknown agent key")?;
-            let der = store.sign(key, message, caller)?;
+            let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+            let span = tracing::info_span!("sign", request_id, agent_pid = std::process::id(), key = %key.name, fingerprint = %key.fingerprint);
+            let _entered = span.enter();
+            tracing::info!(event = "sign_requested", mode = key.mode.as_str(), algorithm = "ecdsa-sha2-nistp256", flags = 0,
+                payload_length = message.len(), payload_sha256 = %STANDARD.encode(Sha256::digest(message)),
+                caller_json = %serde_json::to_string(caller)?);
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                tracing::debug!(event = "sign_payload", encoding = "base64", payload = %STANDARD.encode(message),
+                    utf8 = ?std::str::from_utf8(message).ok());
+            }
+            let der = match store.sign(key, message, caller) {
+                Ok(signature) => signature,
+                Err(error) => {
+                    tracing::error!(event = "sign_failed", error = %format!("{error:#}"));
+                    return Err(error);
+                }
+            };
+            tracing::info!(event = "signature_created", signature_length = der.len());
             let signature =
                 p256::ecdsa::Signature::from_der(&der).context("invalid ECDSA signature")?;
             let bytes = signature.to_bytes();

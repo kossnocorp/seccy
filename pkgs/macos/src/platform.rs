@@ -1,5 +1,9 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use seccy_core::{Caller, Identity, KeyStore, Mode};
+use core_foundation::base::{CFType, TCFType};
+use objc2::rc::Retained;
+use objc2_foundation::NSString;
+use objc2_local_authentication::LAContext;
+use seccy_core::{Caller, Identity, KeyStore, Mode, ProcessInfo};
 use security_framework::{
     access_control::{ProtectionMode, SecAccessControl},
     item::{ItemSearchOptions, KeyClass, Location, Reference, SearchResult},
@@ -20,7 +24,12 @@ fn label(name: &str, mode: Mode) -> String {
 }
 
 fn lookup(name: &str, mode: Mode) -> Result<Option<SecKey>> {
+    lookup_with_context(name, mode, None)
+}
+
+fn lookup_with_context(name: &str, mode: Mode, context: Option<CFType>) -> Result<Option<SecKey>> {
     let result = ItemSearchOptions::new()
+        .local_authentication_context(context)
         .key_class(KeyClass::private())
         .label(&label(name, mode))
         .case_insensitive(Some(false))
@@ -85,8 +94,37 @@ impl KeyStore for SecureEnclave {
     }
 
     fn sign(&self, expected: &Identity, message: &[u8], caller: &Caller) -> Result<Vec<u8>> {
-        // Fetch a fresh reference for each operation; never cache an authenticated LAContext.
-        let key = lookup(&expected.name, expected.mode)?.context("key no longer exists")?;
+        let details = format!(
+            "Key: {}\nFingerprint: {}\nMode: {}; algorithm: ECDSA P-256/SHA-256; payload: {} bytes\n{}",
+            expected.name,
+            expected.fingerprint,
+            expected.mode.as_str(),
+            message.len(),
+            caller.description()
+        );
+        // Fresh context for every signature, attached to the actual key operation.
+        // Keychain ACLs still enforce biometryCurrentSet; this only customizes UI.
+        let context = if expected.mode == Mode::Touchid {
+            // SAFETY: a newly allocated context is confined to this operation.
+            let context = unsafe { LAContext::new() };
+            unsafe {
+                context.setLocalizedReason(&NSString::from_str(&format!(
+                    "Authorize key use.\n{details}"
+                )));
+                context.setTouchIDAuthenticationAllowableReuseDuration(0.0);
+                context.setLocalizedFallbackTitle(Some(&NSString::from_str("")));
+            }
+            Some(context)
+        } else {
+            None
+        };
+        let cf_context = context.as_ref().map(|context| {
+            // Security.framework accepts LAContext as a CFType value. Retain
+            // under the get rule; both wrappers own their respective references.
+            unsafe { CFType::wrap_under_get_rule(Retained::as_ptr(context).cast()) }
+        });
+        let key = lookup_with_context(&expected.name, expected.mode, cf_context)?
+            .context("key no longer exists")?;
         ensure!(
             identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
             "key changed; restart agent"
@@ -95,10 +133,8 @@ impl KeyStore for SecureEnclave {
             .create_signature(Algorithm::ECDSASignatureMessageX962SHA256, message)
             .map_err(|e| anyhow!("Secure Enclave signing failed: {e}"))?;
         if expected.mode == Mode::Notify {
-            notify(&format!(
-                "{} used by {} (PID {})",
-                expected.name, caller.executable, caller.pid
-            ))?;
+            notify(&details)?;
+            tracing::info!(event = "notification_submitted");
         }
         Ok(signature)
     }
@@ -143,12 +179,94 @@ pub fn caller(stream: &UnixStream) -> Result<Caller> {
         )
     };
     ensure!(result == 0 && pid > 0, "cannot identify socket peer PID");
-    let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    let n = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
-    ensure!(n > 0, "cannot resolve socket peer executable");
-    let end = path.iter().position(|b| *b == 0).unwrap_or(path.len());
+    let executable = executable(pid).context("cannot resolve socket peer executable")?;
+    let process = process_info(pid);
+    let mut ancestors = Vec::new();
+    let mut parent_pid = process.as_ref().map(|p| p.parent_pid).unwrap_or(0);
+    while parent_pid > 0 && parent_pid != pid && ancestors.len() < 16 {
+        if ancestors.iter().any(|p: &ProcessInfo| p.pid == parent_pid) {
+            break;
+        }
+        let Some(parent) = process_info(parent_pid) else {
+            break;
+        };
+        parent_pid = parent.parent_pid;
+        ancestors.push(parent);
+    }
     Ok(Caller {
         pid,
-        executable: String::from_utf8_lossy(&path[..end]).into_owned(),
+        executable,
+        peer_uid: uid,
+        peer_gid: gid,
+        process,
+        ancestors,
     })
+}
+
+fn executable(pid: i32) -> Option<String> {
+    let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: path is a writable buffer of the supplied size.
+    let n = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+    if n <= 0 {
+        return None;
+    }
+    let end = path.iter().position(|b| *b == 0).unwrap_or(path.len());
+    Some(String::from_utf8_lossy(&path[..end]).into_owned())
+}
+
+fn process_info(pid: i32) -> Option<ProcessInfo> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+    // SAFETY: proc_pidinfo writes at most `size` bytes to the allocated struct.
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if read != size {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    let name: Vec<u8> = info
+        .pbi_name
+        .iter()
+        .take_while(|b| **b != 0)
+        .map(|b| *b as u8)
+        .collect();
+    Some(ProcessInfo {
+        pid,
+        parent_pid: info.pbi_ppid as i32,
+        executable: executable(pid),
+        name: String::from_utf8_lossy(&name).into_owned(),
+        uid: info.pbi_uid,
+        gid: info.pbi_gid,
+        real_uid: info.pbi_ruid,
+        real_gid: info.pbi_rgid,
+        process_group: info.pbi_pgid,
+        start_time_unix_seconds: info.pbi_start_tvsec,
+        start_time_microseconds: info.pbi_start_tvusec,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_snapshot_matches_current_process() {
+        let process = process_info(std::process::id() as i32).unwrap();
+        assert_eq!(process.pid, std::process::id() as i32);
+        assert_eq!(process.parent_pid, unsafe { libc::getppid() });
+        assert_eq!(process.uid, unsafe { libc::geteuid() });
+        assert_eq!(process.gid, unsafe { libc::getegid() });
+        assert!(process.start_time_unix_seconds > 0);
+        assert_eq!(
+            process.executable.unwrap(),
+            std::env::current_exe().unwrap().to_string_lossy()
+        );
+    }
 }
