@@ -62,6 +62,58 @@ fn decode_envelope(value: &str, expected: &Identity) -> Result<Vec<u8>> {
 }
 
 impl SecureEnclave {
+    pub fn remove(&self, name: &str) -> Result<()> {
+        for mode in [Mode::Touchid, Mode::Notify] {
+            let result = ItemSearchOptions::new()
+                .key_class(KeyClass::private())
+                .label(&label(name, mode))
+                .case_insensitive(Some(false))
+                .ignore_legacy_keychains()
+                .delete();
+            match result {
+                Ok(()) => (),
+                Err(e) if e.code() == -25300 => (),
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn managed_names(&self) -> Result<Vec<String>> {
+        let result = ItemSearchOptions::new()
+            .key_class(KeyClass::private())
+            .ignore_legacy_keychains()
+            .load_attributes(true)
+            .limit(security_framework::item::Limit::All)
+            .search();
+        let items = match result {
+            Ok(items) => items,
+            Err(e) if e.code() == -25300 => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut names = Vec::new();
+        for item in items {
+            if let Some(attributes) = item.simplify_dict()
+                && let Some(label) = attributes.get("labl")
+            {
+                for prefix in ["seccy.v1.touchid.", "seccy.v1.notify."] {
+                    if let Some(name) = label.strip_prefix(prefix)
+                        && !name.is_empty()
+                        && name.len() <= 64
+                        && name
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+                    {
+                        names.push(name.to_owned());
+                    }
+                }
+            }
+        }
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
     pub fn crypto_check(&self, expected: &Identity) -> Result<()> {
         use security_framework_sys::key::{
             SecKeyIsAlgorithmSupported, kSecKeyOperationTypeDecrypt, kSecKeyOperationTypeEncrypt,

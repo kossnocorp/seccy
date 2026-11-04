@@ -575,6 +575,7 @@ dependencies = [
  "ctrlc",
  "fs2",
  "libc",
+ "plist",
  "seccy_core",
  "seccy_macos",
  "serde",

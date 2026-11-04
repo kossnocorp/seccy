@@ -118,13 +118,69 @@ seccy sync --json
 seccy agent --json
 ```
 
-Missing `seccy.toml` (including an explicitly selected missing file) means an empty configuration. `list`, `sync`, and `provision` return empty key arrays; `get` returns `key: null` for an unknown name. An empty agent still runs and advertises zero identities. Malformed or unreadable config files remain errors.
+Provisioning records keys in `$XDG_STATE_HOME/seccy/state.toml` (default
+`~/.local/state/seccy/state.toml`). Each record retains its mode, public identity,
+email/comment, and absolute source `config` path. `list`, `get`, `sync`, and
+`provision` use this inventory even when the original config is unavailable.
+The current `./seccy.toml` (or `--config` file) contributes additional entries;
+registered entries take precedence. Missing config files contribute no entries.
+Malformed or unreadable configs remain errors for commands that consume them.
+With neither registry entries nor config entries, results are empty.
 
-`list` and `get` report `status` (`provisioned` or `not_provisioned`), `mode`, `public_key_path`, `public_key`, `fingerprint`, and `synced`. Missing key material is reported as null rather than failing the command. Actual keychain access errors remain errors. The agent advertises only provisioned keys.
+`list` and `get` report `status` (`provisioned` or `not_provisioned`), `mode`, `public_key_path`, `public_key`, `fingerprint`, `synced`, and `config` (also shown in the Config column). Source paths are absolute, shortened to `~/…` when inside home. Provisioned registered keys show their provisioning source. Unprovisioned keys show the current config when it defines them, otherwise their recorded source. Missing key material is reported as null rather than failing the command. Actual keychain access errors remain errors. The agent advertises only provisioned, registered keys.
 
-Provisioning is idempotent by key name and mode, within the signed app's keychain group. It creates missing keys and persists their public files. `sync` writes missing/outdated public files for existing keys without creating private keys; unprovisioned keys are reported and skipped. Public-key comments use `[user].email`, or the key name when email is absent. Updating the email and running `sync` changes only the comment, not the key or fingerprint. Identical files are left untouched; replacements are atomic.
+Provisioning is idempotent by key name and mode, within the signed app's keychain group. It creates missing keys and persists their public files and registry records. Run `provision` once with each existing config to register keys created by older versions; existing private keys are reused. `sync` writes missing/outdated public files for existing keys without creating private keys; unprovisioned keys are reported and skipped. Public-key comments use `[user].email`, or the key name when email is absent. Updating the source email and running `provision` updates the stored comment, not the private key or fingerprint. Identical public files are left untouched; replacements and registry writes are atomic.
 
-Changing an existing key's mode is rejected: choose a new name and register its public key to rotate. A failed multi-key provision may have created earlier keys; rerun it to finish. Removing a key from config stops advertising it after the agent restarts but retains the keychain item and public file. Config is loaded at startup, not live-reloaded.
+Changing a registered key's mode or provisioning the same name from another
+config is rejected. Choose another name, or explicitly remove the old key first.
+A failed multi-key provision may have completed earlier keys; rerun it to finish.
+Removing an entry from a source config does not remove it from the registry.
+If a registered private key is missing, `list` reports `not_provisioned` and
+`provision` creates a replacement. That replacement has a new identity and cannot
+decrypt ciphertext encrypted for the old key. A missing `.pub` file alone is
+recreated from the existing private key by `sync` or `provision`.
+
+```sh
+seccy remove personal        # asks for confirmation, default No
+seccy remove personal -y     # --yes also skips confirmation
+seccy reset                 # asks before deleting all seccy-managed keys
+seccy reset --yes
+```
+
+Removal deletes private-key material, exported public files, and registry entries.
+Reset also discovers orphaned seccy-labelled Keychain keys and exported public
+files. Both preserve source configs, logs, and service registration. A key still
+in the current config appears as unprovisioned after removal. Non-interactive
+invocations require `-y`/`--yes`; prompts go to stderr, preserving JSON stdout.
+Mutations take an exclusive registry lock; if a key operation is in flight,
+retry after it finishes.
+
+The agent uses only the internal registry, not source configs. It checks file
+metadata before each request and reparses only after changes; provisioning and
+removal take effect without restarting, including on existing SSH connections.
+Malformed registry updates fail requests rather than serving stale identities.
+
+With `LOG_LEVEL=debug` (or `trace`), inventory commands record the full registry
+as JSON, including stored absolute source paths, so it can be compared with the
+displayed inventory. Events in the normal JSON log file are:
+
+- `state_loaded`: persisted `state_json` before merging the current config.
+- `inventory_view`: merged `state_json`, plus `config_json` and `config_path`.
+- `inventory_result`: the command's exact structured output as `result_json`.
+- `state_saved`: `state_json` after a successful registry write (including
+  provision/remove/reset changes).
+- `state_cache_hit`: the agent reused an unchanged parsed registry.
+
+These JSON fields are encoded as strings, like `caller_json`. For example:
+
+```sh
+LOG_LEVEL=debug seccy list
+jq 'select(.fields.event == "state_loaded") | .fields.state_json | fromjson' \
+  "${XDG_STATE_HOME:-$HOME/.local/state}/seccy/logs/seccy.jsonl"
+```
+
+Debug records go to the log file, not command stdout. Registry snapshots contain
+public identities and configuration metadata, not private keys or secret payloads.
 
 ### XDG storage
 
@@ -132,6 +188,7 @@ Changing an existing key's mode is rejected: choose a new name and register its 
 | --- | --- | --- |
 | Public keys | `$XDG_DATA_HOME/seccy/keys/<name>.pub` | `~/.local/share/seccy/keys/<name>.pub` |
 | Agent socket | `$XDG_RUNTIME_DIR/seccy/agent.sock` | When unset: `$XDG_STATE_HOME/seccy/agent.sock`, default `~/.local/state/seccy/agent.sock` |
+| Key registry | `$XDG_STATE_HOME/seccy/state.toml` | `~/.local/state/seccy/state.toml` |
 | Secrets socket | Alongside the agent socket, named `secrets.sock` | `~/.local/state/seccy/secrets.sock` when runtime/state overrides are unset |
 | Provision/sync lock | `$XDG_STATE_HOME/seccy/provision.lock` | `~/.local/state/seccy/provision.lock` |
 
@@ -163,7 +220,7 @@ from CLI stdout, so `--json` keeps its existing contract. The file is append-onl
 and is not automatically rotated; stop the agent before moving/removing it.
 
 ```sh
-LOG_LEVEL=debug seccy --config ~/.config/seccy/seccy.toml agent --json
+LOG_LEVEL=debug seccy agent --json
 tail -f ~/.local/state/seccy/logs/seccy.jsonl
 ```
 
@@ -262,7 +319,7 @@ For custom known-hosts locations, set a colon-separated list of absolute paths:
 
 ```sh
 SECCY_KNOWN_HOSTS="$HOME/.ssh/known_hosts:/path/to/company_known_hosts" \
-  seccy --config ~/.config/seccy/seccy.toml agent
+  seccy agent
 ```
 
 This replaces the default list (up to 16 files). Missing files are ignored;
@@ -300,6 +357,33 @@ Host github.com
 
 The agent runs in the foreground until SIGINT/SIGTERM. `--socket` supports another location whose parent is also owner-only. Concurrent agents cannot own the same socket; a stale socket can be recovered on restart.
 
+### Start automatically at login
+
+Place the complete signed app at a permanent location (for example,
+`/Applications/Seccy.app`), provision your configs, then run:
+
+```sh
+/Applications/Seccy.app/Contents/MacOS/seccy service install
+seccy service status
+seccy service restart
+seccy service uninstall
+```
+
+Installation writes `~/Library/LaunchAgents/fyi.seccy.agent.plist` and starts the
+agent in your GUI login session. launchd starts it at subsequent logins and
+restarts it on exit, throttled to avoid rapid restart loops. Stop a manually
+running agent before installing the service. Installation must run from the
+bundled executable; keep the app at that location or reinstall the service after
+moving it. No source config is needed by the service.
+
+The plist captures the resolved storage/socket paths and optional `LOG_LEVEL`
+and `SECCY_KNOWN_HOSTS` values at installation. Reinstall to change these settings;
+launchd does not inherit shell startup files. Bootstrap stdout/stderr are in
+`~/.local/state/seccy/logs/service.{stdout,stderr}.log` alongside normal JSON logs
+(respecting `XDG_STATE_HOME`). Configure `SSH_AUTH_SOCK` or `IdentityAgent` in your
+clients as above. Uninstall stops the service and removes its plist, retaining
+keys and state. These commands also support `--json`.
+
 ## Git commit signing
 
 Requires Git 2.34+ and OpenSSH with SSH signing support. Register the public key as a **signing key** with your Git hosting provider too.
@@ -334,11 +418,11 @@ mode = "touchid"
 ```
 
 Build/package the updated signed application as described above, then provision
-and start (or restart) its agent with an explicit config path:
+and start its agent (or use the login service above):
 
 ```sh
 seccy --config "$HOME/.config/seccy/seccy.toml" provision
-seccy --config "$HOME/.config/seccy/seccy.toml" agent
+seccy agent
 ```
 
 The agent opens both SSH and secrets sockets. Private-key operations share one
@@ -448,6 +532,6 @@ Agent stdout is JSON Lines with `ready`, `signed`, and `request_error` events; S
 
 The kernel identifies the immediate local socket client, usually `ssh` for authentication and `ssh-keygen` for commit signing. Process ancestry is a best-effort OS snapshot, not proof that a parent terminal or IDE authorized the request; processes may exit, reparent, or exec. Names/paths, code-signing observations, argument-derived context, and repository candidates are reported separately with their sources. Neither ancestry nor a focused application establishes a remote destination or forwarded application's identity. A forwarded agent connection can only be attributed to its local forwarding process. Forwarding constraints and session-binding extensions are not implemented.
 
-The agent accepts same-user clients, advertises only configured keys, bounds frames/connections, serializes signing prompts, and rejects key mutation requests. A process running as your user can request signatures from notification-only keys; this mode is notification, not per-application authorization.
+The agent accepts same-user clients, advertises only registered provisioned keys, bounds frames/connections, serializes signing prompts, and rejects key mutation requests over its sockets. A process running as your user can request signatures from notification-only keys; this mode is notification, not per-application authorization.
 
 Tests cover config rejection, malformed/truncated/oversized requests, signing flags, unknown keys, CLI JSON errors, and real `ssh-add` plus a Git signed commit verified by OpenSSH. Protocol tests use an isolated software **test** key. Secure Enclave persistence, repeated Touch ID prompts/cancellation, notification delivery, and signed packaging must also be checked interactively on provisioned hardware; the automated tests do not establish those behaviors.

@@ -2,6 +2,126 @@ use std::process::Command;
 
 #[cfg(target_os = "macos")]
 #[test]
+fn destructive_commands_require_confirmation_and_accept_both_yes_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state/seccy");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // A malformed registry stops confirmed commands before any Keychain mutation.
+    let registry = state_dir.join("state.toml");
+    std::fs::write(&registry, "invalid = [").unwrap();
+    let config = dir.path().join("seccy.toml");
+    std::fs::write(&config, "[keys.example]\nmode = 'notify'\n").unwrap();
+    for command in [vec!["remove", "example"], vec!["reset"]] {
+        for flag in [None, Some("-y"), Some("--yes")] {
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_seccy"));
+            cmd.args(&command)
+                .arg("--json")
+                .current_dir(dir.path())
+                .env("XDG_STATE_HOME", dir.path().join("state"))
+                .stdin(std::process::Stdio::null());
+            if let Some(flag) = flag {
+                cmd.arg(flag);
+            }
+            let result = cmd.output().unwrap();
+            assert!(!result.status.success());
+            let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+            let error = value["error"].as_str().unwrap();
+            assert!(
+                error.contains(if flag.is_some() {
+                    "invalid seccy state.toml"
+                } else {
+                    "confirmation requires a terminal"
+                }),
+                "{error}"
+            );
+            assert!(result.stderr.is_empty());
+            assert_eq!(std::fs::read_to_string(&registry).unwrap(), "invalid = [");
+            assert_eq!(
+                std::fs::read_to_string(&config).unwrap(),
+                "[keys.example]\nmode = 'notify'\n"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn inventory_survives_missing_source_and_merges_another_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = seccy_core::storage::Paths::resolve(Some(dir.path()), |_| None).unwrap();
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&paths.state)
+        .unwrap();
+    let mut state = seccy_core::state::State::default();
+    state.overlay(
+        &seccy_core::Config::parse("[keys.seccy_inventory_missing_fixture]\nmode='notify'")
+            .unwrap(),
+        &dir.path().join("deleted-source.toml"),
+    );
+    state.save(&paths).unwrap();
+    std::fs::write(
+        dir.path().join("seccy.toml"),
+        "[keys.seccy_inventory_config_fixture]\nmode='notify'",
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_seccy"))
+        .args(["list", "--json"])
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("XDG_STATE_HOME", dir.path().join(".local/state"))
+        .env("XDG_DATA_HOME", dir.path().join(".local/share"))
+        .env("LOG_LEVEL", "debug")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stdout)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let keys = value["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0]["config"], "~/seccy.toml");
+    assert_eq!(keys[1]["config"], "~/deleted-source.toml");
+    assert_eq!(keys[1]["status"], "not_provisioned");
+    assert_eq!(
+        seccy_core::state::State::load(&paths).unwrap().keys.len(),
+        1
+    );
+    let log = std::fs::read_to_string(paths.state.join("logs/seccy.jsonl")).unwrap();
+    let events: Vec<serde_json::Value> = log
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let fields = |name: &str| {
+        events
+            .iter()
+            .find(|event| event["fields"]["event"] == name)
+            .unwrap()["fields"]
+            .clone()
+    };
+    let stored: serde_json::Value =
+        serde_json::from_str(fields("state_loaded")["state_json"].as_str().unwrap()).unwrap();
+    assert_eq!(stored["keys"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        stored["keys"]["seccy_inventory_missing_fixture"]["config"],
+        dir.path().join("deleted-source.toml").to_str().unwrap()
+    );
+    let merged: serde_json::Value =
+        serde_json::from_str(fields("inventory_view")["state_json"].as_str().unwrap()).unwrap();
+    assert_eq!(merged["keys"].as_object().unwrap().len(), 2);
+    let displayed: serde_json::Value =
+        serde_json::from_str(fields("inventory_result")["result_json"].as_str().unwrap()).unwrap();
+    assert_eq!(displayed, value);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn decrypt_cli_preserves_binary_and_newlines_without_logging_payloads() {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use std::{
@@ -119,6 +239,29 @@ fn secrets_agent_rejects_unconfigured_keys_and_untrusted_requests() {
         let response: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(response["ok"], false);
         assert!(!String::from_utf8_lossy(&bytes).contains("never-echo"));
+    }
+    // The same process notices registry updates, fails closed on malformed state,
+    // and recovers after an atomic replacement without a restart.
+    let registry = dir.path().join("state/seccy/state.toml");
+    for (text, expected) in [
+        ("broken = [", "invalid seccy state.toml"),
+        ("[keys]\n", "key is not configured and provisioned"),
+    ] {
+        let temporary = registry.with_extension("new");
+        std::fs::write(&temporary, text).unwrap();
+        std::fs::rename(&temporary, &registry).unwrap();
+        let mut stream = UnixStream::connect(socket).unwrap();
+        seccy_core::agent::write_frame(
+            &mut stream,
+            br#"{"operation":"check","key":"missing","value":null}"#,
+        )
+        .unwrap();
+        let response = seccy_core::agent::read_frame(&mut stream).unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&response).unwrap();
+        assert!(
+            value["error"].as_str().unwrap().contains(expected),
+            "{value}"
+        );
     }
 }
 

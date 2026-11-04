@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
-use seccy_core::{Config, KeyStore, agent};
+use seccy_core::agent;
 use serde_json::json;
 use std::{
     fs::{self, File, OpenOptions},
@@ -60,7 +60,7 @@ impl Drop for SocketGuard {
     }
 }
 
-pub fn run(config: Config, socket: Option<PathBuf>, json_mode: bool) -> Result<()> {
+pub fn run(socket: Option<PathBuf>, json_mode: bool) -> Result<()> {
     let socket = match socket {
         Some(path) => std::path::absolute(path)?,
         None => seccy_core::storage::Paths::from_env()?
@@ -83,23 +83,14 @@ pub fn run(config: Config, socket: Option<PathBuf>, json_mode: bool) -> Result<(
     let _socket_guard = SocketGuard(socket.clone());
     let secrets_listener = bind(&secrets_socket)?;
     let _secrets_guard = SocketGuard(secrets_socket.clone());
-    let keys = Arc::new(
-        config
-            .keys
-            .iter()
-            .map(|(name, key)| seccy_macos::SecureEnclave.identity(name, key.mode))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .map(|identity| identity.with_user(&config.user))
-            .collect::<Vec<_>>(),
-    );
+    let keys = Arc::new(super::inventory::Cached::default());
+    let key_count = keys.keys()?.1.len();
     let stopped = Arc::new(AtomicBool::new(false));
     let signal = stopped.clone();
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))?;
     let active = Arc::new(AtomicUsize::new(0));
     let signing = Arc::new(Mutex::new(()));
-    tracing::info!(event = "agent_ready", socket = %socket.display(), secrets_socket = %secrets_socket.display(), key_count = keys.len());
+    tracing::info!(event = "agent_ready", socket = %socket.display(), secrets_socket = %secrets_socket.display(), key_count);
     super::emit(
         json_mode,
         json!({"ok": true, "event": "ready", "socket": socket, "secrets_socket": secrets_socket}),
@@ -175,7 +166,7 @@ fn event_error(json_mode: bool, error: &anyhow::Error) {
 
 fn serve(
     mut stream: UnixStream,
-    keys: &[seccy_core::Identity],
+    keys: &super::inventory::Cached,
     signing: &Mutex<()>,
     json_mode: bool,
 ) -> Result<()> {
@@ -207,7 +198,13 @@ fn serve(
                 "socket peer PID was reused"
             );
         }
-        let response = match agent::respond(&seccy_macos::SecureEnclave, keys, &caller, &request) {
+        let (_state_lock, current_keys) = keys.keys()?;
+        let response = match agent::respond(
+            &seccy_macos::SecureEnclave,
+            &current_keys,
+            &caller,
+            &request,
+        ) {
             Ok(response) => response,
             Err(error) => {
                 event_error(json_mode, &error);
@@ -224,7 +221,7 @@ fn serve(
         if response.first() == Some(&14) {
             // A successful response means the request was fully validated.
             // Its key blob starts after the message type and string length.
-            let key = keys
+            let key = current_keys
                 .iter()
                 .find(|key| request.get(5..5 + key.blob.len()) == Some(key.blob.as_slice()))
                 .context("signed key missing from advertised identities")?;

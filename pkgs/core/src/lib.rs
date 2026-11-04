@@ -1,6 +1,7 @@
 //! Portable configuration, key-store interface, and OpenSSH agent protocol.
 pub mod agent;
 pub mod payload;
+pub mod state;
 pub mod storage;
 
 use anyhow::{Context, Result, ensure};

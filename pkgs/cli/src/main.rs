@@ -4,11 +4,15 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use usage_rs::{Args, Cli, Subcommands};
 
+#[cfg(target_os = "macos")]
+mod inventory;
 mod logging;
 #[cfg(target_os = "macos")]
 mod secrets;
 #[cfg(target_os = "macos")]
 mod server;
+#[cfg(target_os = "macos")]
+mod service;
 
 /// Secure Enclave SSH authentication and Git signing
 #[derive(Cli)]
@@ -28,9 +32,9 @@ struct App {
 enum Commands {
     /// Idempotently create configured Secure Enclave keys
     Provision(Empty),
-    /// List configured keys and their provisioning and public-file status
+    /// List registered and current-config keys with their status and source
     List(Empty),
-    /// Show information for a configured key
+    /// Show information for a registered or current-config key
     Get(KeyArgs),
     /// Write missing or outdated public-key files
     Sync(Empty),
@@ -42,6 +46,41 @@ enum Commands {
     Decrypt(SecretArgs),
     /// Check the running agent and selected encryption key without Touch ID
     CryptoCheck(SecretArgs),
+    /// Delete a key from the registry, public files, and Keychain
+    Remove(RemoveArgs),
+    /// Delete all seccy keys and registry entries; preserve source configs
+    Reset(ConfirmArgs),
+    /// Manage the per-user login service
+    Service(ServiceArgs),
+}
+
+#[derive(Args)]
+struct ConfirmArgs {
+    /// Skip confirmation
+    #[usage(short = 'y', long)]
+    yes: bool,
+}
+
+#[derive(Args)]
+struct RemoveArgs {
+    name: String,
+    /// Skip confirmation
+    #[usage(short = 'y', long)]
+    yes: bool,
+}
+
+#[derive(Args)]
+struct ServiceArgs {
+    #[usage(subcommand)]
+    command: ServiceCommand,
+}
+
+#[derive(Subcommands)]
+enum ServiceCommand {
+    Install(Empty),
+    Uninstall(Empty),
+    Status(Empty),
+    Restart(Empty),
 }
 
 #[derive(Args)]
@@ -121,8 +160,33 @@ fn main() {
 
 fn run(app: App) -> Result<()> {
     logging::init()?;
-    tracing::info!(event = "command_started", config = %app.config.display());
-    let config = Config::load(&app.config)?;
+    let command = match &app.command {
+        Commands::Provision(_) => "provision",
+        Commands::List(_) => "list",
+        Commands::Get(_) => "get",
+        Commands::Sync(_) => "sync",
+        Commands::Agent(_) => "agent",
+        Commands::Encrypt(_) => "encrypt",
+        Commands::Decrypt(_) => "decrypt",
+        Commands::CryptoCheck(_) => "crypto-check",
+        Commands::Remove(_) => "remove",
+        Commands::Reset(_) => "reset",
+        Commands::Service(_) => "service",
+    };
+    tracing::info!(event = "command_started", command, config = %app.config.display());
+    let config = if matches!(
+        app.command,
+        Commands::Agent(_)
+            | Commands::Service(_)
+            | Commands::Remove(_)
+            | Commands::Reset(_)
+            | Commands::Decrypt(_)
+            | Commands::CryptoCheck(_)
+    ) {
+        Config::default()
+    } else {
+        Config::load(&app.config)?
+    };
     run_platform(app, config)
 }
 
@@ -133,83 +197,26 @@ fn run_platform(_: App, _: Config) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn run_platform(app: App, config: Config) -> Result<()> {
-    use seccy_core::KeyStore;
-    use seccy_core::storage::{KeyInfo, Paths, key_info, sync_public_key};
+    use seccy_core::storage::Paths;
     let store = seccy_macos::SecureEnclave;
     let paths = Paths::from_env()?;
     match app.command {
-        Commands::Provision(_) => {
-            server::private_dir(&paths.state)?;
-            let _lock = server::lock(&paths.state.join("provision.lock"))?;
-            let mut keys = Vec::new();
-            for (name, key) in &config.keys {
-                let (identity, created) = store.provision(name, key.mode)?;
-                let identity = identity.with_user(&config.user);
-                let updated = sync_public_key(&identity, &paths)?;
-                let info = KeyInfo::new(name, key.mode, Some(&identity), &paths)?;
-                keys.push(json!({"key": info, "created": created, "updated": updated}));
-            }
-            emit(
-                app.json,
-                json!({"ok": true, "keys": keys}),
-                if keys.is_empty() {
-                    ""
-                } else {
-                    "Configured keys are provisioned and public files synced"
-                },
-            );
+        command @ (Commands::Provision(_)
+        | Commands::List(_)
+        | Commands::Get(_)
+        | Commands::Sync(_)
+        | Commands::Remove(_)
+        | Commands::Reset(_)) => {
+            inventory::run(command, &config, &app.config, &paths, app.json)?;
         }
-        Commands::List(_) => {
-            let keys = config
-                .keys
-                .keys()
-                .map(|name| key_info(&store, &config, &paths, name))
-                .collect::<Result<Vec<_>>>()?;
-            let keys: Vec<_> = keys.into_iter().flatten().collect();
-            let text = keys
-                .iter()
-                .map(KeyInfo::text)
-                .collect::<Vec<_>>()
-                .join("\n");
-            emit(app.json, json!({"ok": true, "keys": keys}), &text);
-        }
-        Commands::Get(args) => {
-            let key = key_info(&store, &config, &paths, &args.name)?;
-            let text = key.as_ref().map(KeyInfo::text).unwrap_or_default();
-            emit(app.json, json!({"ok": true, "key": key}), &text);
-        }
-        Commands::Sync(_) => {
-            server::private_dir(&paths.state)?;
-            let _lock = server::lock(&paths.state.join("provision.lock"))?;
-            let mut keys = Vec::new();
-            let mut text = Vec::new();
-            for (name, key) in &config.keys {
-                let identity = store
-                    .identity(name, key.mode)?
-                    .map(|i| i.with_user(&config.user));
-                let updated = match &identity {
-                    Some(identity) => sync_public_key(identity, &paths)?,
-                    None => false,
-                };
-                let info = KeyInfo::new(name, key.mode, identity.as_ref(), &paths)?;
-                text.push(info.text());
-                keys.push(json!({"key": info, "updated": updated}));
-            }
-            emit(
-                app.json,
-                json!({"ok": true, "keys": keys}),
-                &text.join("\n"),
-            );
-        }
-        Commands::Agent(args) => server::run(config, args.socket, app.json)?,
+        Commands::Service(args) => service::run(args.command, &paths, app.json)?,
+        Commands::Agent(args) => server::run(args.socket, app.json)?,
         Commands::Encrypt(args) => {
             use anyhow::Context;
-            let key = config
-                .keys
-                .get(&args.name)
-                .context("key is not configured")?;
-            let identity = store
-                .identity(&args.name, key.mode)?
+            let _lock = inventory::read_lock(&paths)?;
+            let state = inventory::view(&paths, &config, &app.config)?;
+            let identity = state
+                .identity(&store, &args.name)?
                 .context("key is not provisioned")?;
             let input = secrets::read_stdin(seccy_macos::MAX_SECRET_BYTES)?;
             let value = store.encrypt(&identity, &input)?;

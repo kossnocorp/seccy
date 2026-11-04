@@ -55,6 +55,7 @@ pub enum KeyStatus {
 
 #[derive(Debug, Serialize)]
 pub struct KeyInfo {
+    pub config: Option<String>,
     pub name: String,
     pub mode: Mode,
     pub status: KeyStatus,
@@ -72,6 +73,7 @@ impl KeyInfo {
             None => false,
         };
         Ok(Self {
+            config: None,
             name: name.into(),
             mode,
             status: if identity.is_some() {
@@ -92,12 +94,13 @@ impl KeyInfo {
             KeyStatus::NotProvisioned => "not_provisioned",
         };
         format!(
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             self.name,
             self.mode.as_str(),
             status,
             if self.synced { "synced" } else { "not_synced" },
-            self.public_key_path.display()
+            self.public_key_path.display(),
+            self.config.as_deref().unwrap_or("-")
         )
     }
 }

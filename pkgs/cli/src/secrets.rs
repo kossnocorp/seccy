@@ -1,7 +1,7 @@
 //! Local secrets protocol. Payloads and responses must never enter tracing.
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use seccy_core::{Identity, agent};
+use seccy_core::agent;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -102,7 +102,11 @@ pub fn request(
     Ok(response)
 }
 
-pub fn serve(mut stream: UnixStream, keys: &[Identity], operations: &Mutex<()>) -> Result<()> {
+pub fn serve(
+    mut stream: UnixStream,
+    keys: &super::inventory::Cached,
+    operations: &Mutex<()>,
+) -> Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(120)))?;
     stream.set_write_timeout(Some(Duration::from_secs(120)))?;
@@ -112,6 +116,10 @@ pub fn serve(mut stream: UnixStream, keys: &[Identity], operations: &Mutex<()>) 
         // Do not expose serde errors: they can contain client-supplied values.
         let request: Request = serde_json::from_slice(&frame)
             .map_err(|_| anyhow::anyhow!("invalid secrets request"))?;
+        let _guard = operations
+            .lock()
+            .map_err(|_| anyhow::anyhow!("key operation lock poisoned"))?;
+        let (_state_lock, keys) = keys.keys()?;
         let identity = keys
             .iter()
             .find(|key| key.name == request.key)
@@ -126,9 +134,6 @@ pub fn serve(mut stream: UnixStream, keys: &[Identity], operations: &Mutex<()>) 
             }
             "decrypt" => {
                 let value = request.value.context("missing ciphertext")?;
-                let _guard = operations
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("key operation lock poisoned"))?;
                 let caller = seccy_macos::caller(&stream)?;
                 ensure!(caller.pid == connected.pid, "socket peer changed");
                 if let (Some(before), Some(now)) = (&connected.process, &caller.process) {
