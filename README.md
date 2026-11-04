@@ -131,8 +131,8 @@ Changing an existing key's mode is rejected: choose a new name and register its 
 | Item | Path | Default |
 | --- | --- | --- |
 | Public keys | `$XDG_DATA_HOME/seccy/keys/<name>.pub` | `~/.local/share/seccy/keys/<name>.pub` |
-| Agent socket | `$XDG_RUNTIME_DIR/seccy/agent.sock` | When unset: `$XDG_CACHE_HOME/seccy/run/agent.sock`, default `~/.cache/seccy/run/agent.sock` |
-| Secrets socket | Alongside the agent socket, named `secrets.sock` | `~/.cache/seccy/run/secrets.sock` when runtime/cache overrides are unset |
+| Agent socket | `$XDG_RUNTIME_DIR/seccy/agent.sock` | When unset: `$XDG_STATE_HOME/seccy/agent.sock`, default `~/.local/state/seccy/agent.sock` |
+| Secrets socket | Alongside the agent socket, named `secrets.sock` | `~/.local/state/seccy/secrets.sock` when runtime/state overrides are unset |
 | Provision/sync lock | `$XDG_STATE_HOME/seccy/provision.lock` | `~/.local/state/seccy/provision.lock` |
 
 Relative XDG values are ignored, as required by the XDG specification. Socket and lock directories are owner-only. Existing `~/.seccy` sockets are no longer used. Public files can be regenerated with `sync`; private keys remain in the keychain. The config path still defaults to `./seccy.toml`.
@@ -283,16 +283,16 @@ In another terminal:
 if [ -n "$XDG_RUNTIME_DIR" ]; then
     export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/seccy/agent.sock"
 else
-    export SSH_AUTH_SOCK="${XDG_CACHE_HOME:-$HOME/.cache}/seccy/run/agent.sock"
+    export SSH_AUTH_SOCK="${XDG_STATE_HOME:-$HOME/.local/state}/seccy/agent.sock"
 fi
 ssh-add -L
 ```
 
-Set `SSH_AUTH_SOCK` to the socket path from the agent's `ready` event. With the default macOS fallback, use `export SSH_AUTH_SOCK="$HOME/.cache/seccy/run/agent.sock"`. Register `~/.local/share/seccy/keys/personal.pub` (or its XDG override) with your SSH server or Git hosting provider. Optionally select a particular key in `~/.ssh/config` (these paths assume the default macOS fallback):
+Set `SSH_AUTH_SOCK` to the socket path from the agent's `ready` event. With the default macOS fallback, use `export SSH_AUTH_SOCK="$HOME/.local/state/seccy/agent.sock"`. Register `~/.local/share/seccy/keys/personal.pub` (or its XDG override) with your SSH server or Git hosting provider. Optionally select a particular key in `~/.ssh/config` (these paths assume the default macOS fallback):
 
 ```sshconfig
 Host github.com
-    IdentityAgent ~/.cache/seccy/run/agent.sock
+    IdentityAgent ~/.local/state/seccy/agent.sock
     IdentityFile ~/.local/share/seccy/keys/personal.pub
     IdentitiesOnly yes
     ForwardAgent no
@@ -305,7 +305,7 @@ The agent runs in the foreground until SIGINT/SIGTERM. `--socket` supports anoth
 Requires Git 2.34+ and OpenSSH with SSH signing support. Register the public key as a **signing key** with your Git hosting provider too.
 
 ```sh
-export SSH_AUTH_SOCK="$HOME/.cache/seccy/run/agent.sock" # or your XDG runtime socket
+export SSH_AUTH_SOCK="$HOME/.local/state/seccy/agent.sock" # or your XDG runtime socket
 git config --global gpg.format ssh
 git config --global user.signingkey "${XDG_DATA_HOME:-$HOME/.local/share}/seccy/keys/personal.pub"
 git config --global commit.gpgsign true

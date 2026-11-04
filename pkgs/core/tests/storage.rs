@@ -36,7 +36,7 @@ impl KeyStore for Store {
 #[test]
 fn xdg_paths_and_fallbacks() {
     let paths = Paths::resolve(Some(Path::new("/home/test")), |_| None).unwrap();
-    assert_eq!(paths.runtime, Path::new("/home/test/.cache/seccy/run"));
+    assert_eq!(paths.runtime, Path::new("/home/test/.local/state/seccy"));
     assert_eq!(
         paths.public_key("work"),
         Path::new("/home/test/.local/share/seccy/keys/work.pub")
@@ -53,7 +53,7 @@ fn xdg_paths_and_fallbacks() {
     assert_eq!(paths.runtime, Path::new("/run/user/501/seccy"));
     assert_eq!(paths.keys, Path::new("/data/seccy/keys"));
     let paths = Paths::resolve(Some(Path::new("/home/test")), |_| Some("relative".into())).unwrap();
-    assert_eq!(paths.runtime, Path::new("/home/test/.cache/seccy/run"));
+    assert_eq!(paths.runtime, Path::new("/home/test/.local/state/seccy"));
 }
 
 #[test]

@@ -32,7 +32,7 @@ impl Paths {
         };
         let runtime = match get("XDG_RUNTIME_DIR").filter(|p| p.is_absolute()) {
             Some(path) => path.join("seccy"),
-            None => base("XDG_CACHE_HOME", ".cache")?.join("seccy/run"),
+            None => base("XDG_STATE_HOME", ".local/state")?.join("seccy"),
         };
         Ok(Self {
             keys: base("XDG_DATA_HOME", ".local/share")?.join("seccy/keys"),
