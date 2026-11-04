@@ -420,7 +420,27 @@ mode = "notify"
 github = "auth"
 ```
 
-Authenticate the GitHub CLI with `gh auth login`, provision your keys, then run:
+Authenticate the GitHub CLI with SSH as the Git protocol, skip SSH key generation,
+and authorize management of both authentication and signing keys:
+
+```sh
+gh auth login \
+    --hostname github.com \
+    --git-protocol ssh \
+    --skip-ssh-key \
+    --scopes admin:public_key,admin:ssh_signing_key
+```
+
+If already authenticated, add the required permissions:
+
+```sh
+gh auth refresh -h github.com -s admin:public_key
+gh auth refresh -h github.com -s admin:ssh_signing_key
+```
+
+Both scopes are required because sync lists and reconciles both key types.
+Missing scopes can produce `404 Not Found` responses from these endpoints.
+Provision your keys, then run:
 
 ```sh
 seccy gh sync
