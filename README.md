@@ -182,6 +182,28 @@ jq 'select(.fields.event == "state_loaded") | .fields.state_json | fromjson' \
 Debug records go to the log file, not command stdout. Registry snapshots contain
 public identities and configuration metadata, not private keys or secret payloads.
 
+### Query command output
+
+Every command supporting `--json` also accepts global `--jq '<jq expression>'`.
+The query overrides `--json` and runs against the same complete JSON response,
+using the embedded jaq interpreter and its standard library:
+
+```sh
+seccy list --jq '.keys[] | {name, status, config}'
+seccy get personal --jq '.key.fingerprint'
+seccy service status --jq '.running'
+seccy agent --jq 'select(.event == "signed") | .key'
+```
+
+Results use jq-style pretty-printed JSON: strings remain quoted, each result is
+written separately, and `empty` / unmatched `select` produce no output. Agent
+events are filtered individually. Decryption queries receive `value_base64`,
+just like `--json`. Help and command-error JSON responses can also be queried.
+Command failures retain their nonzero exit status; `false`, `null`, or no query
+results do not themselves cause failure. Query syntax/compilation errors fail
+before the command runs; evaluation errors go to stderr and exit nonzero (earlier
+results may already have been written). Queries affect output, not command actions.
+
 ### XDG storage
 
 | Item | Path | Default |

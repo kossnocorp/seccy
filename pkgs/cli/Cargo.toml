@@ -23,6 +23,9 @@ ctrlc = { version = "3", features = ["termination"] }
 fs2 = "0.4"
 plist = "1"
 tempfile = "3"
+jaq-core = "3.1.2"
+jaq-std = "3.0.4"
+jaq-json = "2.0.3"
 
 [dev-dependencies]
 tempfile = "3"

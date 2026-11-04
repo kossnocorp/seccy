@@ -60,7 +60,7 @@ impl Drop for SocketGuard {
     }
 }
 
-pub fn run(socket: Option<PathBuf>, json_mode: bool) -> Result<()> {
+pub fn run(socket: Option<PathBuf>, output: &crate::Output) -> Result<()> {
     let socket = match socket {
         Some(path) => std::path::absolute(path)?,
         None => seccy_core::storage::Paths::from_env()?
@@ -90,16 +90,17 @@ pub fn run(socket: Option<PathBuf>, json_mode: bool) -> Result<()> {
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))?;
     let active = Arc::new(AtomicUsize::new(0));
     let signing = Arc::new(Mutex::new(()));
+    let (output_errors, errors) = std::sync::mpsc::channel();
     tracing::info!(event = "agent_ready", socket = %socket.display(), secrets_socket = %secrets_socket.display(), key_count);
     super::emit(
-        json_mode,
+        output,
         json!({"ok": true, "event": "ready", "socket": socket, "secrets_socket": secrets_socket}),
         &format!(
             "SSH_AUTH_SOCK={}\nSecrets socket: {}",
             socket.display(),
             secrets_socket.display()
         ),
-    );
+    )?;
     while !stopped.load(Ordering::Relaxed) {
         for (listener, secrets) in [(&listener, false), (&secrets_listener, true)] {
             match listener.accept() {
@@ -112,14 +113,25 @@ pub fn run(socket: Option<PathBuf>, json_mode: bool) -> Result<()> {
                     let active = active.clone();
                     let keys = keys.clone();
                     let signing = signing.clone();
+                    let output = output.clone();
+                    let stopped = stopped.clone();
+                    let output_errors = output_errors.clone();
                     std::thread::spawn(move || {
                         let result = if secrets {
                             super::secrets::serve(stream, &keys, &signing)
                         } else {
-                            serve(stream, &keys, &signing, json_mode)
+                            serve(stream, &keys, &signing, &output)
                         };
                         if let Err(error) = result {
-                            event_error(json_mode, &error);
+                            let result = if error.is::<crate::output::QueryError>() {
+                                Err(error)
+                            } else {
+                                event_error(&output, &error)
+                            };
+                            if let Err(error) = result {
+                                let _ = output_errors.send(error);
+                                stopped.store(true, Ordering::Relaxed);
+                            }
                         }
                         active.fetch_sub(1, Ordering::Relaxed);
                     });
@@ -131,6 +143,9 @@ pub fn run(socket: Option<PathBuf>, json_mode: bool) -> Result<()> {
         std::thread::sleep(Duration::from_millis(10));
     }
     tracing::info!(event = "agent_stopped");
+    if let Ok(error) = errors.try_recv() {
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -152,23 +167,24 @@ fn bind(socket: &Path) -> Result<UnixListener> {
     Ok(listener)
 }
 
-fn event_error(json_mode: bool, error: &anyhow::Error) {
+fn event_error(output: &crate::Output, error: &anyhow::Error) -> Result<()> {
     tracing::error!(event = "request_error", error = %format!("{error:#}"));
-    if json_mode {
-        println!(
-            "{}",
-            json!({"ok": false, "event": "request_error", "error": format!("{error:#}")})
-        );
+    if output.structured() {
+        output.emit(
+            json!({"ok": false, "event": "request_error", "error": format!("{error:#}")}),
+            "",
+        )?;
     } else {
         eprintln!("agent: {error:#}");
     }
+    Ok(())
 }
 
 fn serve(
     mut stream: UnixStream,
     keys: &super::inventory::Cached,
     signing: &Mutex<()>,
-    json_mode: bool,
+    output: &crate::Output,
 ) -> Result<()> {
     // Darwin inherits O_NONBLOCK from the listener on accepted sockets.
     stream.set_nonblocking(false)?;
@@ -207,7 +223,7 @@ fn serve(
         ) {
             Ok(response) => response,
             Err(error) => {
-                event_error(json_mode, &error);
+                event_error(output, &error)?;
                 vec![agent::FAILURE]
             }
         };
@@ -226,11 +242,8 @@ fn serve(
                 .find(|key| request.get(5..5 + key.blob.len()) == Some(key.blob.as_slice()))
                 .context("signed key missing from advertised identities")?;
             tracing::info!(event = "signature_delivered", key = %key.name, fingerprint = %key.fingerprint, peer_pid = caller.pid);
-            if json_mode {
-                println!(
-                    "{}",
-                    json!({"ok": true, "event": "signed", "key": key.name, "fingerprint": key.fingerprint, "caller": caller})
-                );
+            if output.structured() {
+                output.emit(json!({"ok": true, "event": "signed", "key": key.name, "fingerprint": key.fingerprint, "caller": caller}), "")?;
             } else {
                 eprintln!(
                     "Key {} used by {} (PID {})",

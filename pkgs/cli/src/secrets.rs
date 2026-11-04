@@ -29,7 +29,7 @@ pub fn read_stdin(limit: usize) -> Result<Vec<u8>> {
     Ok(input)
 }
 
-pub fn decrypt(args: super::SecretArgs, json_mode: bool) -> Result<()> {
+pub fn decrypt(args: super::SecretArgs, output: &crate::Output) -> Result<()> {
     let input =
         String::from_utf8(read_stdin(128 * 1024 + 2)?).context("ciphertext must be UTF-8")?;
     let response = request(
@@ -43,13 +43,13 @@ pub fn decrypt(args: super::SecretArgs, json_mode: bool) -> Result<()> {
             .as_str()
             .context("invalid agent response")?,
     )?;
-    if json_mode {
+    if output.structured() {
         // Base64 preserves arbitrary bytes, including non-UTF-8 and trailing newlines.
         super::emit(
-            true,
+            output,
             json!({"ok": true, "value_base64": STANDARD.encode(bytes)}),
             "",
-        );
+        )?;
     } else {
         std::io::stdout().write_all(&bytes)?;
     }

@@ -129,7 +129,7 @@ fn decrypt_cli_preserves_binary_and_newlines_without_logging_payloads() {
         os::unix::{fs::PermissionsExt, net::UnixListener},
         process::Stdio,
     };
-    for json_mode in [false, true] {
+    for (json_mode, query) in [(false, false), (true, false), (false, true), (true, true)] {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("secrets.sock");
         let listener = UnixListener::bind(&socket).unwrap();
@@ -165,6 +165,9 @@ fn decrypt_cli_preserves_binary_and_newlines_without_logging_payloads() {
         if json_mode {
             command.arg("--json");
         }
+        if query {
+            command.args(["--jq", ".value_base64"]);
+        }
         let mut child = command.spawn().unwrap();
         child
             .stdin
@@ -179,7 +182,10 @@ fn decrypt_cli_preserves_binary_and_newlines_without_logging_payloads() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        if json_mode {
+        if query {
+            let value: String = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(STANDARD.decode(value).unwrap(), payload);
+        } else if json_mode {
             let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(
                 STANDARD

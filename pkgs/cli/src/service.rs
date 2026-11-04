@@ -85,7 +85,7 @@ fn definition(executable: &Path, home: &Path, paths: &Paths) -> Result<plist::Va
     Ok(dict.into())
 }
 
-pub fn run(command: ServiceCommand, paths: &Paths, json_mode: bool) -> Result<()> {
+pub fn run(command: ServiceCommand, paths: &Paths, output: &crate::Output) -> Result<()> {
     let home = PathBuf::from(std::env::var_os("HOME").context("HOME is required")?);
     ensure!(home.is_absolute(), "HOME must be absolute");
     let directory = home.join("Library/LaunchAgents");
@@ -123,10 +123,10 @@ pub fn run(command: ServiceCommand, paths: &Paths, json_mode: bool) -> Result<()
             checked(&["enable", &target])?;
             checked(&["bootstrap", &domain, text(&file)?])?;
             emit(
-                json_mode,
+                output,
                 json!({"ok": true, "service": LABEL, "plist": file}),
                 "Service installed and started; it will start at login",
-            );
+            )?;
         }
         ServiceCommand::Uninstall(_) => {
             if launchctl(&["print", &target])?.status.success() {
@@ -137,25 +137,25 @@ pub fn run(command: ServiceCommand, paths: &Paths, json_mode: bool) -> Result<()
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
                 Err(e) => return Err(e.into()),
             }
-            emit(json_mode, json!({"ok": true}), "Service uninstalled");
+            emit(output, json!({"ok": true}), "Service uninstalled")?;
         }
         ServiceCommand::Restart(_) => {
             checked(&["kickstart", "-k", &target])?;
-            emit(json_mode, json!({"ok": true}), "Service restarted");
+            emit(output, json!({"ok": true}), "Service restarted")?;
         }
         ServiceCommand::Status(_) => {
-            let output = launchctl(&["print", &target])?;
-            let loaded = output.status.success();
-            let details = String::from_utf8_lossy(&output.stdout);
+            let status = launchctl(&["print", &target])?;
+            let loaded = status.status.success();
+            let details = String::from_utf8_lossy(&status.stdout);
             let running = loaded && details.lines().any(|line| line.trim() == "state = running");
             emit(
-                json_mode,
+                output,
                 json!({"ok": true, "installed": file.exists(), "loaded": loaded, "running": running, "details": details}),
                 &format!(
                     "Installed: {}; loaded: {loaded}; running: {running}\n{details}",
                     file.exists()
                 ),
-            );
+            )?;
         }
     }
     Ok(())

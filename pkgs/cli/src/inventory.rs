@@ -16,9 +16,9 @@ use std::{
 
 type Stamp = (u64, u64, i64, i64, i64, i64);
 
-fn emit(json_mode: bool, value: serde_json::Value, text: &str) {
+fn emit(output: &crate::Output, value: serde_json::Value, text: &str) -> Result<()> {
     tracing::debug!(event = "inventory_result", result_json = %value);
-    crate::emit(json_mode, value, text);
+    crate::emit(output, value, text)
 }
 
 fn log_view(state: &State, config: &Config, source: &Path) -> Result<()> {
@@ -153,7 +153,7 @@ pub fn run(
     config: &Config,
     source: &Path,
     paths: &Paths,
-    json_mode: bool,
+    output_mode: &crate::Output,
 ) -> Result<()> {
     match &command {
         Commands::Remove(args) => {
@@ -234,10 +234,10 @@ pub fn run(
                 output.push(json!({"key": info, "created": created, "updated": updated}));
             }
             emit(
-                json_mode,
+                output_mode,
                 json!({"ok": true, "keys": output}),
                 "Keys provisioned and public files synced",
-            );
+            )?;
         }
         Commands::List(_) | Commands::Get(_) | Commands::Sync(_) => {
             let source = absolute_source(source)?;
@@ -246,7 +246,7 @@ pub fn run(
             if let Commands::Get(args) = command {
                 let info = reported_info(&state, paths, config, &source, &args.name)?;
                 let text = info.as_ref().map(KeyInfo::text).unwrap_or_default();
-                emit(json_mode, json!({"ok": true, "key": info}), &text);
+                emit(output_mode, json!({"ok": true, "key": info}), &text)?;
             } else {
                 let mut output = Vec::new();
                 let mut text = Vec::new();
@@ -270,10 +270,10 @@ pub fn run(
                     text.insert(0, "Name\tMode\tStatus\tPublic file\tPath\tConfig".into());
                 }
                 emit(
-                    json_mode,
+                    output_mode,
                     json!({"ok": true, "keys": output}),
                     &text.join("\n"),
-                );
+                )?;
             }
         }
         Commands::Remove(args) => {
@@ -282,10 +282,10 @@ pub fn run(
             state.keys.remove(&args.name);
             state.save(paths)?;
             emit(
-                json_mode,
+                output_mode,
                 json!({"ok": true, "removed": args.name}),
                 "Key removed",
-            );
+            )?;
         }
         Commands::Reset(_) => {
             let mut names: std::collections::BTreeSet<_> = state.keys.keys().cloned().collect();
@@ -316,10 +316,10 @@ pub fn run(
             }
             state.save(paths)?;
             emit(
-                json_mode,
+                output_mode,
                 json!({"ok": true}),
                 "All seccy keys and registry entries removed",
-            );
+            )?;
         }
         _ => unreachable!(),
     }
