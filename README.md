@@ -191,11 +191,16 @@ using the embedded jaq interpreter and its standard library:
 ```sh
 seccy list --jq '.keys[] | {name, status, config}'
 seccy get personal --jq '.key.fingerprint'
+seccy get personal --jq-raw '.key.public_key'
 seccy service status --jq '.running'
 seccy agent --jq 'select(.event == "signed") | .key'
 ```
 
-Results use jq-style pretty-printed JSON: strings remain quoted, each result is
+Use `--jq-raw '<expression>'` instead of `--jq` for jq-style raw output: string
+results are printed without quotes or JSON escaping, followed by a newline.
+Other values remain JSON. Both options override `--json` and cannot be combined.
+
+Results from `--jq` use jq-style pretty-printed JSON: strings remain quoted, each result is
 written separately, and `empty` / unmatched `select` produce no output. Agent
 events are filtered individually. Decryption queries receive `value_base64`,
 just like `--json`. Help and command-error JSON responses can also be queried.

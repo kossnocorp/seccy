@@ -79,6 +79,43 @@ fn invalid_queries_fail_before_command_execution() {
     }
 }
 
+#[test]
+fn raw_queries_handle_strings_json_and_parser_responses() {
+    let result = run(&[
+        "--help",
+        "--json",
+        "--jq-raw",
+        r#""hello\n\"world\"", "", null, false, 42, {a: "b"}, empty"#,
+    ]);
+    assert!(result.status.success());
+    assert_eq!(
+        result.stdout,
+        b"hello\n\"world\"\n\nnull\nfalse\n42\n{\n  \"a\": \"b\"\n}\n"
+    );
+    let result = run(&["unknown", "--jq-raw=\"raw error\""]);
+    assert!(!result.status.success());
+    assert_eq!(result.stdout, b"raw error\n");
+    let result = run(&["reset", "--yes", "--jq-raw", ".["]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("query:"));
+    let result = run(&["--help", "--jq", ".", "--jq-raw", "."]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("cannot be used together"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn raw_queries_work_on_command_results() {
+    for args in [
+        vec!["list", "--json", "--jq-raw", "\"public key\", .ok"],
+        vec!["--jq-raw", "\"public key\", .ok", "get", "missing"],
+    ] {
+        let result = run(&args);
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"public key\ntrue\n");
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn command_errors_are_filtered_but_query_errors_are_not() {

@@ -6,6 +6,7 @@ use jaq_core::{
     unwrap_valr,
 };
 use jaq_json::Val;
+use jaq_std::ValT;
 use serde_json::Value;
 use std::{io::Write, sync::Arc};
 
@@ -14,6 +15,7 @@ type Filter = jaq_core::Filter<data::JustLut<Val>>;
 #[derive(Clone, Default)]
 pub struct Output {
     json: bool,
+    raw: bool,
     query: Option<Arc<Filter>>,
 }
 
@@ -30,7 +32,13 @@ impl std::fmt::Display for QueryError {
 impl std::error::Error for QueryError {}
 
 impl Output {
-    pub fn new(json: bool, query: Option<&str>) -> Result<Self> {
+    pub fn new(json: bool, query: Option<&str>, raw_query: Option<&str>) -> Result<Self> {
+        anyhow::ensure!(
+            query.is_none() || raw_query.is_none(),
+            "--jq and --jq-raw cannot be used together"
+        );
+        let raw = raw_query.is_some();
+        let query = query.or(raw_query);
         let query = query
             .map(|code| {
                 let defs = jaq_core::defs()
@@ -50,7 +58,7 @@ impl Output {
                 Ok::<_, anyhow::Error>(Arc::new(filter))
             })
             .transpose()?;
-        Ok(Self { json, query })
+        Ok(Self { json, raw, query })
     }
 
     pub fn structured(&self) -> bool {
@@ -74,7 +82,13 @@ impl Output {
             };
             for result in filter.id.run((ctx, input)).map(unwrap_valr) {
                 let value = result.map_err(|e| QueryError(e.to_string()))?;
-                jaq_json::write::write(out, &pp, 0, &value)?;
+                if self.raw
+                    && let Some(text) = value.as_bytes()
+                {
+                    out.write_all(text)?;
+                } else {
+                    jaq_json::write::write(out, &pp, 0, &value)?;
+                }
                 writeln!(out)?;
             }
         } else if self.json {

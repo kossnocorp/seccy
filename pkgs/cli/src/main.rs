@@ -31,6 +31,9 @@ struct App {
     /// Filter the JSON response with a jq expression (overrides --json)
     #[usage(long, global)]
     jq: Option<String>,
+    /// Filter JSON with jq, printing string results without quotes
+    #[usage(long, global)]
+    jq_raw: Option<String>,
     #[usage(subcommand)]
     command: Commands,
 }
@@ -152,12 +155,17 @@ fn main() {
             // same output flags for those structured responses as well.
             let mut json = false;
             let mut query = None;
+            let mut raw_query = None;
             let mut args = argv.iter();
             while let Some(arg) = args.next() {
                 if arg == "--" {
                     break;
                 }
-                if arg == "--jq" {
+                if arg == "--jq-raw" {
+                    raw_query = args.next().and_then(|s| s.to_str());
+                } else if let Some(value) = arg.to_str().and_then(|s| s.strip_prefix("--jq-raw=")) {
+                    raw_query = Some(value);
+                } else if arg == "--jq" {
                     query = args.next().and_then(|s| s.to_str());
                 } else if let Some(value) = arg.to_str().and_then(|s| s.strip_prefix("--jq=")) {
                     query = Some(value);
@@ -165,7 +173,7 @@ fn main() {
                     json = true;
                 }
             }
-            let output = match Output::new(json, query) {
+            let output = match Output::new(json, query, raw_query) {
                 Ok(output) => output,
                 Err(error) => {
                     eprintln!("{error:#}");
@@ -193,7 +201,7 @@ fn main() {
             std::process::exit(exit.code);
         }
     };
-    let output = match Output::new(app.json, app.jq.as_deref()) {
+    let output = match Output::new(app.json, app.jq.as_deref(), app.jq_raw.as_deref()) {
         Ok(output) => output,
         Err(error) => {
             eprintln!("{error:#}");
