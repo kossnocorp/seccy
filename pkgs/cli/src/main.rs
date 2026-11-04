@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use usage_rs::{Args, Cli, Subcommands};
 
 #[cfg(target_os = "macos")]
+mod gh;
+#[cfg(target_os = "macos")]
 mod inventory;
 mod logging;
 mod output;
@@ -57,6 +59,30 @@ enum Commands {
     Reset(ConfirmArgs),
     /// Manage the per-user login service
     Service(ServiceArgs),
+    /// Manage GitHub SSH keys using gh
+    Gh(GhArgs),
+}
+
+#[derive(Args)]
+struct GhArgs {
+    #[usage(subcommand)]
+    command: GhCommand,
+}
+
+#[derive(Subcommands)]
+enum GhCommand {
+    /// Reconcile this machine's GitHub authentication and signing keys
+    Sync(GhSyncArgs),
+}
+
+#[derive(Args)]
+struct GhSyncArgs {
+    /// Display the plan and apply without confirmation
+    #[usage(short = 'y', long)]
+    yes: bool,
+    /// Command prefix used to invoke gh (shell-style quoting)
+    #[usage(long, default = "gh")]
+    cmd: String,
 }
 
 #[derive(Args)]
@@ -175,6 +201,10 @@ fn main() {
         }
     };
     if let Err(error) = run(app, &output) {
+        #[cfg(target_os = "macos")]
+        if error.is::<gh::CommandFailed>() {
+            std::process::exit(1);
+        }
         if error.is::<output::QueryError>() {
             tracing::error!(event = "query_failed");
             eprintln!("{error:#}");
@@ -209,6 +239,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         Commands::Remove(_) => "remove",
         Commands::Reset(_) => "reset",
         Commands::Service(_) => "service",
+        Commands::Gh(_) => "gh",
     };
     tracing::info!(event = "command_started", command, config = %app.config.display());
     let config = if matches!(
@@ -247,6 +278,9 @@ fn run_platform(app: App, config: Config, output: &Output) -> Result<()> {
             inventory::run(command, &config, &app.config, &paths, output)?;
         }
         Commands::Service(args) => service::run(args.command, &paths, output)?,
+        Commands::Gh(args) => match args.command {
+            GhCommand::Sync(args) => gh::run(args, &config, &app.config, &paths, output)?,
+        },
         Commands::Agent(args) => server::run(args.socket, output)?,
         Commands::Encrypt(args) => {
             use anyhow::Context;

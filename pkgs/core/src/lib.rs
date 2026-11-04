@@ -13,14 +13,14 @@ use std::{collections::BTreeMap, path::Path};
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
-    Touchid,
+    Prompt,
     Notify,
 }
 
 impl Mode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Touchid => "touchid",
+            Self::Prompt => "prompt",
             Self::Notify => "notify",
         }
     }
@@ -30,6 +30,14 @@ impl Mode {
 #[serde(deny_unknown_fields)]
 pub struct KeyConfig {
     pub mode: Mode,
+    pub github: Option<Github>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Github {
+    Signing,
+    Auth,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

@@ -104,7 +104,7 @@ fn absolute_source(path: &Path) -> Result<std::path::PathBuf> {
     }
 }
 
-fn confirm(yes: bool, message: &str) -> Result<()> {
+pub fn confirm(yes: bool, message: &str) -> Result<()> {
     if yes {
         return Ok(());
     }
@@ -222,6 +222,10 @@ pub fn run(
                     name.clone(),
                     Record {
                         email,
+                        github: config
+                            .keys
+                            .get(name)
+                            .map_or(record.github, |key| key.github),
                         public_key: Some(identity.public_key.clone()),
                         fingerprint: Some(identity.fingerprint.clone()),
                         ..record.clone()

@@ -16,6 +16,7 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub struct Record {
     pub mode: Mode,
+    pub github: Option<crate::Github>,
     pub config: PathBuf,
     pub email: Option<String>,
     pub public_key: Option<String>,
@@ -48,7 +49,14 @@ impl State {
                 user: UserConfig {
                     email: record.email.clone(),
                 },
-                keys: [(name.clone(), KeyConfig { mode: record.mode })].into(),
+                keys: [(
+                    name.clone(),
+                    KeyConfig {
+                        mode: record.mode,
+                        github: record.github,
+                    },
+                )]
+                .into(),
             };
             Config::parse(&toml::to_string(&config)?)?;
             ensure!(
@@ -77,6 +85,7 @@ impl State {
         for (name, key) in &config.keys {
             self.keys.entry(name.clone()).or_insert_with(|| Record {
                 mode: key.mode,
+                github: key.github,
                 config: source.into(),
                 email: config.user.email.clone(),
                 public_key: None,

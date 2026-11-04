@@ -4,7 +4,7 @@ Config-driven Secure Enclave SSH agent and CLI, written in Rust with [usage](htt
 
 - SSH authentication, including Git over SSH.
 - Git commit/tag signing through OpenSSH's SSH signing format.
-- `touchid`: hardware-enforced biometric authorization for private-key operations.
+- `prompt`: hardware-enforced biometric authorization for private-key operations.
 - `notify`: no biometric prompt; send a macOS notification identifying the key and local client executable/PID after signing.
 - `--json`: machine-readable command results and errors; newline-delimited events for the foreground agent.
 - `encrypt` / `decrypt`: authenticated encryption with a selected Secure Enclave key, including a fnox Lua provider.
@@ -31,7 +31,7 @@ Workspace:
 
 ## macOS packaging
 
-Requires an Apple Silicon or Secure Enclave-equipped Intel Mac, a logged-in GUI user session, and enrolled Touch ID for `touchid` keys. Keys are non-exportable P-256 (`ecdsa-sha2-nistp256`); there is no software fallback or private-key import.
+Requires an Apple Silicon or Secure Enclave-equipped Intel Mac, a logged-in GUI user session, and enrolled Touch ID for `prompt` keys. Keys are non-exportable P-256 (`ecdsa-sha2-nistp256`); there is no software fallback or private-key import.
 
 The data-protection keychain requires a code-signing identity and a provisioning profile authorizing the app identifier and keychain group. A plain `cargo build` is sufficient for tests and commands with an empty config, but is not a deployment build for keychain operations. See [Apple TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
 
@@ -104,7 +104,7 @@ Create `seccy.toml` (or pass `--config /path/to/seccy.toml`):
 email = "koss@nocorp.me"
 
 [keys.personal]
-mode = "touchid"
+mode = "prompt"
 
 [keys.automation]
 mode = "notify"
@@ -406,6 +406,41 @@ launchd does not inherit shell startup files. Bootstrap stdout/stderr are in
 clients as above. Uninstall stops the service and removes its plist, retaining
 keys and state. These commands also support `--json`.
 
+## GitHub key sync
+
+Mark keys for GitHub authentication or signing in your config:
+
+```toml
+[keys.personal]
+mode = "prompt"
+github = "signing"
+
+[keys.work]
+mode = "notify"
+github = "auth"
+```
+
+Authenticate the GitHub CLI with `gh auth login`, provision your keys, then run:
+
+```sh
+seccy gh sync
+seccy gh sync --yes
+seccy gh sync --cmd 'mise x gh@latest --' -y
+```
+
+Sync lists both GitHub key types and manages titles matching
+`<whoami>@<hostname>/seccy/<key>`. It removes stale, duplicate, changed, or
+wrong-type entries and adds missing keys. Public-key comments do not affect
+matching. The plan is printed before confirmation, including with `-y`/`--yes`.
+An unprovisioned selected key stops sync before remote changes.
+
+Only keys with `github = "signing"` or `github = "auth"` are selected. The current
+config's GitHub settings override registered settings; provisioning persists them
+for use when the source config is unavailable. `--cmd` accepts a shell-quoted
+command prefix, without shell expansion. Successful gh stdout is captured;
+failed gh stdout and stderr are forwarded verbatim and the command exits nonzero.
+The command also supports seccy's `--json` and `--jq`; plans go to stderr.
+
 ## Git commit signing
 
 Requires Git 2.34+ and OpenSSH with SSH signing support. Register the public key as a **signing key** with your Git hosting provider too.
@@ -429,14 +464,14 @@ git verify-commit HEAD
 
 seccy uses Apple's **ECIES P-256 / X9.63 SHA-256 / AES-GCM** implementation.
 Encryption uses the public key without Touch ID. Decryption uses the private key
-in the Secure Enclave, with the same `touchid` or `notify` policy as signing.
+in the Secure Enclave, with the same `prompt` or `notify` policy as signing.
 Existing keys can be selected; a dedicated key makes secret-key rotation independent
 of SSH key rotation:
 
 ```toml
 # Add to your seccy.toml
 [keys.secrets]
-mode = "touchid"
+mode = "prompt"
 ```
 
 Build/package the updated signed application as described above, then provision
@@ -521,7 +556,7 @@ fnox exec -- ./your-app
 fnox stores ciphertext in its config. The plugin passes data through stdin and
 JSON stdout, never shell interpolation or secret-bearing command arguments.
 Batch reads run sequentially; **each secret decryption requires its own Touch ID
-authorization** for `touchid` keys. Keep `daemon_cache = false` to prevent later
+authorization** for `prompt` keys. Keep `daemon_cache = false` to prevent later
 commands receiving cached plaintext without a fresh key operation. Avoid fallback
 defaults for secrets that must fail when authorization fails.
 
@@ -545,7 +580,7 @@ and notification delivery must also be checked with the signed app on hardware.
 `--json` works before or after a subcommand. Successes have `"ok":true`; failures have `"ok":false` and `"error"`. Command results are a single JSON object on stdout. Exit status is 0 for success, 1 for operational errors, 2 for CLI parse errors. Help/version requests in JSON mode return a `text` field.
 
 ```json
-{"ok":true,"keys":[{"name":"personal","mode":"touchid","status":"not_provisioned","public_key_path":"/Users/you/.local/share/seccy/keys/personal.pub","public_key":null,"fingerprint":null,"synced":false}]}
+{"ok":true,"keys":[{"name":"personal","mode":"prompt","status":"not_provisioned","public_key_path":"/Users/you/.local/share/seccy/keys/personal.pub","public_key":null,"fingerprint":null,"synced":false}]}
 ```
 
 Agent stdout is JSON Lines with `ready`, `signed`, and `request_error` events; SSH protocol bytes travel only over the socket. A `signed` event includes the local client's executable and PID. It means a signature was returned, not that a remote server accepted it.

@@ -7,7 +7,7 @@ fn registry_roundtrips_sources_and_does_not_overwrite_registered_keys() {
     std::fs::create_dir_all(&paths.state).unwrap();
     let first =
         Config::parse("[user]\nemail='first@example.com'\n[keys.one]\nmode='notify'").unwrap();
-    let second = Config::parse("[keys.one]\nmode='touchid'\n[keys.two]\nmode='touchid'").unwrap();
+    let second = Config::parse("[keys.one]\nmode='prompt'\n[keys.two]\nmode='prompt'").unwrap();
     let mut state = State::default();
     state.overlay(&first, &dir.path().join("first.toml"));
     state.save(&paths).unwrap();

@@ -60,7 +60,7 @@ fn xdg_paths_and_fallbacks() {
 fn inventory_and_sync_update_comments_without_changing_key() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
-    let mut config = Config::parse("[user]\nemail='old@example.com'\n[keys.work]\nmode='notify'\n[keys.missing]\nmode='touchid'").unwrap();
+    let mut config = Config::parse("[user]\nemail='old@example.com'\n[keys.work]\nmode='notify'\n[keys.missing]\nmode='prompt'").unwrap();
     let missing = key_info(&Store, &config, &paths, "missing")
         .unwrap()
         .unwrap();

@@ -63,7 +63,7 @@ fn decode_envelope(value: &str, expected: &Identity) -> Result<Vec<u8>> {
 
 impl SecureEnclave {
     pub fn remove(&self, name: &str) -> Result<()> {
-        for mode in [Mode::Touchid, Mode::Notify] {
+        for mode in [Mode::Prompt, Mode::Notify] {
             let result = ItemSearchOptions::new()
                 .key_class(KeyClass::private())
                 .label(&label(name, mode))
@@ -96,7 +96,7 @@ impl SecureEnclave {
             if let Some(attributes) = item.simplify_dict()
                 && let Some(label) = attributes.get("labl")
             {
-                for prefix in ["seccy.v1.touchid.", "seccy.v1.notify."] {
+                for prefix in ["seccy.v1.prompt.", "seccy.v1.notify."] {
                     if let Some(name) = label.strip_prefix(prefix)
                         && !name.is_empty()
                         && name.len() <= 64
@@ -206,7 +206,7 @@ fn encrypt_envelope(public: &SecKey, expected: &Identity, plaintext: &[u8]) -> R
 }
 
 fn authentication_context(mode: Mode, details: &str) -> Option<Retained<LAContext>> {
-    if mode != Mode::Touchid {
+    if mode != Mode::Prompt {
         return None;
     }
     // SAFETY: this context is confined to one private-key operation.
@@ -266,8 +266,8 @@ fn identity(key: &SecKey, name: &str, mode: Mode) -> Result<Identity> {
 impl KeyStore for SecureEnclave {
     fn provision(&self, name: &str, mode: Mode) -> Result<(Identity, bool)> {
         let other = match mode {
-            Mode::Touchid => Mode::Notify,
-            Mode::Notify => Mode::Touchid,
+            Mode::Prompt => Mode::Notify,
+            Mode::Notify => Mode::Prompt,
         };
         ensure!(
             lookup(name, other)?.is_none(),
@@ -277,7 +277,7 @@ impl KeyStore for SecureEnclave {
             return Ok((identity(&key, name, mode)?, false));
         }
         let mut flags = kSecAccessControlPrivateKeyUsage;
-        if mode == Mode::Touchid {
+        if mode == Mode::Prompt {
             flags |= kSecAccessControlBiometryCurrentSet;
         }
         let access = SecAccessControl::create_with_protection(
@@ -487,7 +487,7 @@ mod tests {
             .set_key_type(KeyType::ec_sec_prime_random())
             .set_size_in_bits(256);
         let key = SecKey::new(&options).unwrap();
-        let identity = identity(&key, "test", Mode::Touchid).unwrap();
+        let identity = identity(&key, "test", Mode::Prompt).unwrap();
         (key, identity)
     }
 

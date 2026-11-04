@@ -2,7 +2,9 @@
 email = "koss@nocorp.me"
 
 [keys.ssh]
-mode = "touchid"
+mode = "prompt"
+github = "auth"
 
 [keys.signing]
 mode = "notify"
+github = "signing"
