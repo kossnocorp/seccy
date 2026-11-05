@@ -6,6 +6,7 @@ fn run(args: &[&str]) -> Output {
         .args(args)
         .current_dir(dir.path())
         .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_DATA_HOME", dir.path().join("data"))
         .env("LOG_LEVEL", "off")
         .stdin(Stdio::null())

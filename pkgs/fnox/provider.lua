@@ -8,10 +8,6 @@ local function invoke(ctx, operation, input)
     error("seccy provider requires options.key")
   end
   local argv = { options.bin or "seccy", "--json" }
-  if options.config then
-    table.insert(argv, "--config")
-    table.insert(argv, options.config)
-  end
   table.insert(argv, operation)
   table.insert(argv, options.key)
   if options.socket and operation ~= "encrypt" then

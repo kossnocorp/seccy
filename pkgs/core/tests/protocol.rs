@@ -97,7 +97,7 @@ fn framing_rejects_oversized_and_truncated_input() {
 
 #[test]
 fn config_is_strict() {
-    assert!(Config::parse(include_str!("../../../seccy.example.toml")).is_ok());
+    assert!(Config::parse(include_str!("../../../config.example.toml")).is_ok());
     for text in [
         "[keys.bad]\nmode='silent'",
         "[keys.bad]\nmode='notify'\nextra=true",

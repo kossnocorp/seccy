@@ -46,6 +46,7 @@ impl State {
         // Reuse configuration validation for names and emails before filesystem access.
         for (name, record) in &state.keys {
             let config = Config {
+                log_level: None,
                 user: UserConfig {
                     email: record.email.clone(),
                 },

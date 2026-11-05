@@ -50,6 +50,7 @@ pub struct UserConfig {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    pub log_level: Option<String>,
     #[serde(default)]
     pub user: UserConfig,
     #[serde(default)]
@@ -58,7 +59,7 @@ pub struct Config {
 
 impl Config {
     pub fn parse(text: &str) -> Result<Self> {
-        let config: Self = toml::from_str(text).context("invalid seccy.toml")?;
+        let config: Self = toml::from_str(text).context("invalid configuration TOML")?;
         if let Some(email) = &config.user.email {
             ensure!(
                 !email.is_empty() && !email.chars().any(|c| c.is_whitespace() || c.is_control()),
@@ -81,7 +82,7 @@ impl Config {
 
     pub fn load(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text),
+            Ok(text) => Self::parse(&text).with_context(|| format!("load {}", path.display())),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
         }

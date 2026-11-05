@@ -8,10 +8,24 @@ use std::{
 use tracing_subscriber::filter::LevelFilter;
 
 pub fn init() -> Result<()> {
-    let value = std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".into());
+    let (value, source) = match std::env::var("LOG_LEVEL") {
+        Ok(value) => (value, "LOG_LEVEL".to_owned()),
+        Err(_) => {
+            let paths = Paths::from_env()?;
+            // Configuration-independent commands still work with a missing or
+            // malformed config. Commands consuming keys report load errors later.
+            let config = seccy_core::Config::load(&paths.config).ok();
+            (
+                config
+                    .and_then(|config| config.log_level)
+                    .unwrap_or_else(|| "info".into()),
+                format!("log_level in {}", paths.config.display()),
+            )
+        }
+    };
     let level: LevelFilter = value
         .parse()
-        .context("LOG_LEVEL must be off, error, warn, info, debug, or trace")?;
+        .with_context(|| format!("{source} must be off, error, warn, info, debug, or trace"))?;
     if level == LevelFilter::OFF {
         return Ok(());
     }

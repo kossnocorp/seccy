@@ -70,7 +70,7 @@ pub fn request(
             .join("secrets.sock"),
     };
     let metadata = std::fs::symlink_metadata(&socket)
-        .context("seccy agent unavailable; start `seccy --config /path/to/seccy.toml agent`")?;
+        .context("seccy agent unavailable; start `seccy agent`")?;
     use std::os::unix::fs::FileTypeExt;
     ensure!(
         metadata.file_type().is_socket()

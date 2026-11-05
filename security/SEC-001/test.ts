@@ -24,11 +24,12 @@ async function main() {
   const temporary = mkdtempSync('/tmp/sec001-');
   const sockets = new Set<Socket>();
   const agent = spawn(artifact.executable, [
-    '--config', join(temporary, 'absent.toml'), 'agent', '--json',
+    'agent', '--json',
   ], {
     cwd: temporary,
     env: {
       ...process.env, HOME: temporary, XDG_STATE_HOME: join(temporary, 'state'),
+      XDG_CONFIG_HOME: join(temporary, 'config'),
       XDG_DATA_HOME: join(temporary, 'data'), XDG_RUNTIME_DIR: temporary, LOG_LEVEL: 'off',
     },
     stdio: ['ignore', 'pipe', 'inherit'],

@@ -100,9 +100,13 @@ can take several minutes or longer.
 
 ## Configure and provision
 
-Create `seccy.toml` (or pass `--config /path/to/seccy.toml`):
+Create `$XDG_CONFIG_HOME/seccy/config.toml`, or `~/.config/seccy/config.toml`
+when `XDG_CONFIG_HOME` is unset, empty, or relative. Create the `seccy` directory
+if needed. This is the sole configuration file, independent of the working directory:
 
 ```toml
+log_level = "info"
+
 [user]
 email = "koss@nocorp.me"
 
@@ -125,17 +129,17 @@ Provisioning records keys in `$XDG_STATE_HOME/seccy/state.toml` (default
 `~/.local/state/seccy/state.toml`). Each record retains its mode, public identity,
 email/comment, and absolute source `config` path. `list`, `get`, `sync`, and
 `provision` use this inventory even when the original config is unavailable.
-The current `./seccy.toml` (or `--config` file) contributes additional entries;
+The user `config.toml` contributes additional entries;
 registered entries take precedence. Missing config files contribute no entries.
 Malformed or unreadable configs remain errors for commands that consume them.
 With neither registry entries nor config entries, results are empty.
 
 `list` and `get` report `status` (`provisioned` or `not_provisioned`), `mode`, `public_key_path`, `public_key`, `fingerprint`, `synced`, and `config` (also shown in the Config column). Source paths are absolute, shortened to `~/…` when inside home. Provisioned registered keys show their provisioning source. Unprovisioned keys show the current config when it defines them, otherwise their recorded source. Missing key material is reported as null rather than failing the command. Actual keychain access errors remain errors. The agent advertises only provisioned, registered keys.
 
-Provisioning is idempotent by key name and mode, within the signed app's keychain group. It creates missing keys and persists their public files and registry records. Run `provision` once with each existing config to register keys created by older versions; existing private keys are reused. `sync` writes missing/outdated public files for existing keys without creating private keys; unprovisioned keys are reported and skipped. Public-key comments use `[user].email`, or the key name when email is absent. Updating the source email and running `provision` updates the stored comment, not the private key or fingerprint. Identical public files are left untouched; replacements and registry writes are atomic.
+Provisioning is idempotent by key name and mode, within the signed app's keychain group. It creates missing keys and persists their public files and registry records. Existing private keys are reused. `sync` writes missing/outdated public files for existing keys without creating private keys; unprovisioned keys are reported and skipped. Public-key comments use `[user].email`, or the key name when email is absent. Updating the source email and running `provision` updates the stored comment, not the private key or fingerprint. Identical public files are left untouched; replacements and registry writes are atomic.
 
-Changing a registered key's mode or provisioning the same name from another
-config is rejected. Choose another name, or explicitly remove the old key first.
+Changing a registered key's mode is rejected. Choose another name, or explicitly
+remove the old key first.
 A failed multi-key provision may have completed earlier keys; rerun it to finish.
 Removing an entry from a source config does not remove it from the registry.
 If a registered private key is missing, `list` reports `not_provisioned` and
@@ -158,7 +162,8 @@ invocations require `-y`/`--yes`; prompts go to stderr, preserving JSON stdout.
 Mutations take an exclusive registry lock; if a key operation is in flight,
 retry after it finishes.
 
-The agent uses only the internal registry, not source configs. It checks file
+The agent gets keys only from the internal registry and reads `log_level` from
+the user configuration at startup. It checks file
 metadata before each request and reparses only after changes; provisioning and
 removal take effect without restarting, including on existing SSH connections.
 Malformed registry updates fail requests rather than serving stale identities.
@@ -229,15 +234,30 @@ results may already have been written). Queries affect output, not command actio
 
 ### XDG storage
 
+#### Migrating local configuration
+
+Move your existing local configuration to the user `config.toml` location above.
+If you have multiple local files, merge their `[keys.<name>]` tables into that
+one file. Deduplicate identical names, resolve conflicting settings, preserve
+registered keys' modes, and choose one `[user].email` for the merged configuration.
+Run `seccy provision` to register or reuse those keys and update their recorded
+source to the global path. Keys absent from the merged file remain registered.
+Local `seccy.toml` files are ignored, even when malformed; neither the current
+directory nor its parents are searched. Remove old `--config` arguments and fnox
+`options.config` settings, then run `seccy fnox init` to update the plugin.
+Reinstall the login service after changing `XDG_CONFIG_HOME` so it captures the
+resolved location.
+
 | Item | Path | Default |
 | --- | --- | --- |
+| User configuration | `$XDG_CONFIG_HOME/seccy/config.toml` | `~/.config/seccy/config.toml` |
 | Public keys | `$XDG_STATE_HOME/seccy/keys/<name>.pub` | `~/.local/state/seccy/keys/<name>.pub` |
 | Agent socket | `$XDG_RUNTIME_DIR/seccy/agent.sock` | When unset: `$XDG_STATE_HOME/seccy/agent.sock`, default `~/.local/state/seccy/agent.sock` |
 | Key registry | `$XDG_STATE_HOME/seccy/state.toml` | `~/.local/state/seccy/state.toml` |
 | Secrets socket | Alongside the agent socket, named `secrets.sock` | `~/.local/state/seccy/secrets.sock` when runtime/state overrides are unset |
 | Provision/sync lock | `$XDG_STATE_HOME/seccy/provision.lock` | `~/.local/state/seccy/provision.lock` |
 
-Relative XDG values are ignored, as required by the XDG specification. Socket and lock directories are owner-only. Existing `~/.seccy` sockets are no longer used. Public files can be regenerated with `sync`; private keys remain in the keychain. The config path still defaults to `./seccy.toml`.
+Empty and relative XDG values are ignored, as required by the XDG specification. Socket and lock directories are owner-only. Existing `~/.seccy` sockets are no longer used. Public files can be regenerated with `sync`; private keys remain in the keychain.
 
 Touch ID uses `biometryCurrentSet` plus `privateKeyUsage`: password fallback is not enabled, and changing enrolled fingerprints invalidates access. Notification-only keys use `privateKeyUsage`. Both modes require an unlocked device and use device-only keychain protection.
 
@@ -252,7 +272,11 @@ attached to the actual keychain signing operation.
 
 ### File logging and payload inspection
 
-`LOG_LEVEL` accepts `off`, `error`, `warn`, `info` (default), `debug`, or `trace`.
+Set top-level `log_level` in the user `config.toml` to `off`, `error`, `warn`,
+`info` (default), `debug`, or `trace`. `LOG_LEVEL`, when set, overrides it.
+Restart the agent (`seccy service restart`) after editing the level; service
+definitions do not need to change. For services installed by older versions,
+run `seccy service install` once to remove the previously captured `LOG_LEVEL`.
 Logs are appended as JSON Lines to:
 
 ```text
@@ -428,10 +452,10 @@ mode = "prompt"
 mode = "prompt"
 ```
 
-Provision it explicitly (the default config path is `./seccy.toml`):
+Provision the user configuration:
 
 ```sh
-seccy --config "$HOME/.config/seccy/config.toml" provision
+seccy provision
 ```
 
 Register `auth.pub` and `signing.pub` with your personal hosting account as
@@ -537,7 +561,7 @@ running agent before installing the service. Installation must run from the
 bundled executable; keep the app at that location or reinstall the service after
 moving it. No source config is needed by the service.
 
-The plist captures the resolved storage/socket paths and optional `LOG_LEVEL`
+The plist captures the resolved configuration/storage/socket paths
 and `SECCY_KNOWN_HOSTS` values at installation. Reinstall to change these settings;
 launchd does not inherit shell startup files. Bootstrap stdout/stderr are in
 `~/.local/state/seccy/logs/service.{stdout,stderr}.log` alongside normal JSON logs
@@ -628,7 +652,7 @@ Existing keys can be selected; a dedicated key makes secret-key rotation indepen
 of SSH key rotation:
 
 ```toml
-# Add to your seccy.toml
+# Add to ~/.config/seccy/config.toml (or $XDG_CONFIG_HOME/seccy/config.toml)
 [keys.secrets]
 mode = "prompt"
 ```
@@ -637,7 +661,7 @@ Build/package the updated signed application as described above, then provision
 and start its agent (or use the login service above):
 
 ```sh
-seccy --config "$HOME/.config/seccy/seccy.toml" provision
+seccy provision
 seccy agent
 ```
 
@@ -649,7 +673,7 @@ Its path is included as `secrets_socket` in the JSON `ready` event.
 ### CLI
 
 ```sh
-seccy --config "$HOME/.config/seccy/seccy.toml" encrypt secrets < secret.txt > secret.enc
+seccy encrypt secrets < secret.txt > secret.enc
 seccy decrypt secrets < secret.enc > recovered.txt
 seccy crypto-check secrets --json
 ```
@@ -658,7 +682,7 @@ seccy crypto-check secrets --json
 `seccy:v1:...` ciphertext string. It requires the configured, provisioned key but
 does not require a running agent. `decrypt` reads ciphertext from stdin and writes
 the exact plaintext bytes without adding a newline. It uses the running agent's
-configured keys; `--config` does not change the agent's configuration. Both
+registered keys. Both
 `decrypt` and `crypto-check` accept `--socket /absolute/path/to/secrets.sock`.
 
 `crypto-check` verifies agent connectivity, key presence, and ECIES capability
@@ -725,14 +749,14 @@ daemon_cache = false
 [providers.seccy.options]
 key = "secrets"
 bin = "/absolute/path/to/Seccy.app/Contents/MacOS/seccy"
-config = "/absolute/path/to/seccy.toml"
 # Optional, when the agent uses a custom secrets socket:
 # socket = "/absolute/path/to/secrets.sock"
 ```
 
 Alternatively set `plugin = "/absolute/path/to/Seccy.app/Contents/Resources/fnox"`
 directly, using the directory printed by `seccy fnox info --jq-raw .plugin_dir`.
-`bin` defaults to `seccy` on PATH. Use absolute `bin`, `config`, and `socket` option
+The provider uses the same XDG user configuration as the CLI.
+`bin` defaults to `seccy` on PATH. Use absolute `bin` and `socket` option
 paths: Lua option paths do not receive fnox's config-relative path resolution or
 shell `~` expansion. The executable must stay inside its signed app bundle.
 

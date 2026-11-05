@@ -11,7 +11,8 @@ fn destructive_commands_require_confirmation_and_accept_both_yes_flags() {
     // A malformed registry stops confirmed commands before any Keychain mutation.
     let registry = state_dir.join("state.toml");
     std::fs::write(&registry, "invalid = [").unwrap();
-    let config = dir.path().join("seccy.toml");
+    let config = dir.path().join("config/seccy/config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(&config, "[keys.example]\nmode = 'notify'\n").unwrap();
     for command in [vec!["remove", "example"], vec!["reset"]] {
         for flag in [None, Some("-y"), Some("--yes")] {
@@ -19,6 +20,7 @@ fn destructive_commands_require_confirmation_and_accept_both_yes_flags() {
             cmd.args(&command)
                 .arg("--json")
                 .current_dir(dir.path())
+                .env("XDG_CONFIG_HOME", dir.path().join("config"))
                 .env("XDG_STATE_HOME", dir.path().join("state"))
                 .stdin(std::process::Stdio::null());
             if let Some(flag) = flag {
@@ -48,7 +50,7 @@ fn destructive_commands_require_confirmation_and_accept_both_yes_flags() {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
-fn inventory_survives_missing_source_and_merges_another_config() {
+fn inventory_survives_missing_source_and_merges_user_config() {
     let dir = tempfile::tempdir().unwrap();
     let paths = seccy_core::storage::Paths::resolve(Some(dir.path()), |_| None).unwrap();
     use std::os::unix::fs::DirBuilderExt;
@@ -64,8 +66,9 @@ fn inventory_survives_missing_source_and_merges_another_config() {
         &dir.path().join("deleted-source.toml"),
     );
     state.save(&paths).unwrap();
+    std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
     std::fs::write(
-        dir.path().join("seccy.toml"),
+        &paths.config,
         "[keys.seccy_inventory_config_fixture]\nmode='notify'",
     )
     .unwrap();
@@ -73,6 +76,7 @@ fn inventory_survives_missing_source_and_merges_another_config() {
         .args(["list", "--json"])
         .current_dir(dir.path())
         .env("HOME", dir.path())
+        .env_remove("XDG_CONFIG_HOME")
         .env("XDG_STATE_HOME", dir.path().join(".local/state"))
         .env("XDG_DATA_HOME", dir.path().join(".local/share"))
         .env("LOG_LEVEL", "debug")
@@ -86,7 +90,7 @@ fn inventory_survives_missing_source_and_merges_another_config() {
     let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     let keys = value["keys"].as_array().unwrap();
     assert_eq!(keys.len(), 2);
-    assert_eq!(keys[0]["config"], "~/seccy.toml");
+    assert_eq!(keys[0]["config"], "~/.config/seccy/config.toml");
     assert_eq!(keys[1]["config"], "~/deleted-source.toml");
     assert_eq!(keys[1]["status"], "not_provisioned");
     assert_eq!(
@@ -155,8 +159,7 @@ fn decrypt_cli_preserves_binary_and_newlines_without_logging_payloads() {
         command
             .args(["decrypt", "secrets", "--socket"])
             .arg(&socket)
-            .arg("--config")
-            .arg(dir.path().join("missing.toml"))
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
             .env("XDG_STATE_HOME", dir.path().join("state"))
             .env("LOG_LEVEL", "trace")
             .stdin(Stdio::piped())
@@ -213,8 +216,8 @@ fn secrets_agent_rejects_unconfigured_keys_and_untrusted_requests() {
     };
     let dir = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_seccy"))
-        .args(["agent", "--json", "--config"])
-        .arg(dir.path().join("missing.toml"))
+        .args(["agent", "--json"])
+        .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_RUNTIME_DIR", dir.path())
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .stdout(Stdio::piped())
@@ -299,8 +302,7 @@ fn missing_config_means_empty_results() {
         let output = Command::new(env!("CARGO_BIN_EXE_seccy"))
             .args(&args)
             .arg("--json")
-            .arg("--config")
-            .arg(dir.path().join("missing.toml"))
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
             .env("XDG_DATA_HOME", dir.path().join("data"))
             .env("XDG_STATE_HOME", dir.path().join("state"))
             .env("XDG_RUNTIME_DIR", dir.path().join("run"))
@@ -324,14 +326,141 @@ fn missing_config_means_empty_results() {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
+fn user_config_is_independent_of_cwd_and_local_files() {
+    let dir = tempfile::tempdir().unwrap();
+    for override_value in [None, Some(""), Some("relative"), Some("absolute")] {
+        let config_home = if override_value == Some("absolute") {
+            dir.path().join("custom config")
+        } else {
+            dir.path().join(".config")
+        };
+        let config = config_home.join("seccy/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        for local in ["[keys.local]\nmode='notify'", "invalid = ["] {
+            std::fs::write(dir.path().join("seccy.toml"), local).unwrap();
+            for cwd in [dir.path().to_owned(), dir.path().join("project/nested")] {
+                std::fs::create_dir_all(&cwd).unwrap();
+                let run = || {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_seccy"));
+                    command
+                        .args(["list", "--json"])
+                        .current_dir(&cwd)
+                        .env("HOME", dir.path())
+                        .env("XDG_STATE_HOME", dir.path().join("state"))
+                        .env("LOG_LEVEL", "off")
+                        .env_remove("XDG_CONFIG_HOME");
+                    if let Some(value) = override_value {
+                        command.env(
+                            "XDG_CONFIG_HOME",
+                            if value == "absolute" {
+                                config_home.as_os_str()
+                            } else {
+                                std::ffi::OsStr::new(value)
+                            },
+                        );
+                    }
+                    command.output().unwrap()
+                };
+                std::fs::write(&config, "[keys.seccy_global_fixture]\nmode='notify'").unwrap();
+                let output = run();
+                assert!(output.status.success(), "{output:?}");
+                let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(value["keys"].as_array().unwrap().len(), 1);
+                assert_eq!(value["keys"][0]["name"], "seccy_global_fixture");
+                std::fs::write(&config, "invalid = [").unwrap();
+                let output = run();
+                assert!(!output.status.success());
+                let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert!(
+                    value["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains(config.to_str().unwrap())
+                );
+                std::fs::remove_file(&config).unwrap();
+                let output = run();
+                assert!(output.status.success());
+                let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert_eq!(value["keys"], serde_json::json!([]));
+            }
+        }
+    }
+}
+
+#[test]
+fn config_path_option_is_removed_from_parser_and_help() {
+    let help = Command::new(env!("CARGO_BIN_EXE_seccy"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(!String::from_utf8_lossy(&help.stdout).contains("--config"));
+    let output = Command::new(env!("CARGO_BIN_EXE_seccy"))
+        .args(["--json", "--config", "/unused/config.toml", "list"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], false);
+}
+
+#[test]
+fn config_controls_logging_with_environment_override() {
+    for (level, override_level, expected) in [
+        ("debug", None, Some("debug")),
+        ("off", None, None),
+        ("off", Some("trace"), Some("trace")),
+        ("debug", Some("off"), None),
+        ("invalid", None, None),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config/seccy/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, format!("log_level = '{level}'")).unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_seccy"));
+        // fnox init does not consume key configuration, just like the agent.
+        command
+            .args(["fnox", "init", "--json"])
+            .env("HOME", dir.path())
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
+            .env("XDG_STATE_HOME", dir.path().join("state"))
+            .env("XDG_DATA_HOME", dir.path().join("data"))
+            .env_remove("LOG_LEVEL");
+        if let Some(value) = override_level {
+            command.env("LOG_LEVEL", value);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.success(), level != "invalid", "{output:?}");
+        if level == "invalid" {
+            let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert!(
+                value["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains(config.to_str().unwrap())
+            );
+        }
+        let log = dir.path().join("state/seccy/logs/seccy.jsonl");
+        assert_eq!(log.exists(), expected.is_some());
+        if let Some(expected) = expected {
+            let text = std::fs::read_to_string(log).unwrap();
+            let event: serde_json::Value =
+                serde_json::from_str(text.lines().next().unwrap()).unwrap();
+            assert_eq!(event["fields"]["log_level"], expected);
+        }
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
 fn log_file_is_private_and_does_not_pollute_json_stdout() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     for level in ["debug", "off", "invalid"] {
         let state = dir.path().join(level);
         let output = Command::new(env!("CARGO_BIN_EXE_seccy"))
-            .args(["list", "--json", "--config"])
-            .arg(dir.path().join("missing.toml"))
+            .args(["list", "--json"])
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
             .env("LOG_LEVEL", level)
             .env("XDG_STATE_HOME", &state)
             .output()

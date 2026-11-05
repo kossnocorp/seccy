@@ -36,6 +36,7 @@ esac
             .args(flags)
             .current_dir(dir.path())
             .env("XDG_STATE_HOME", dir.path().join("state"))
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
             .env("CALLS", &calls)
             .env("FAIL", if fail { "yes" } else { "no" })
             .stdin(Stdio::null())

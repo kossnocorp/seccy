@@ -102,8 +102,9 @@ seccy init --device /dev/hidraw14 --json # use the path actually listed above
 
 Installation files are separate from persistent state. Exported public keys are
 in `$XDG_STATE_HOME/seccy/keys` (default `~/.local/state/seccy/keys`), alongside
-the registry, vault metadata, and logs. Configs belong in `$XDG_CONFIG_HOME/seccy`
-and user sockets in `$XDG_RUNTIME_DIR/seccy`. Encrypted records remain in Secret
+the registry, vault metadata, and logs. Configuration is loaded only from
+`$XDG_CONFIG_HOME/seccy/config.toml` (default `~/.config/seccy/config.toml`).
+User sockets are in `$XDG_RUNTIME_DIR/seccy`. Encrypted records remain in Secret
 Service. Upgrades replace managed installation files, never vault state.
 
 When upgrading from the earlier layout, run `seccy sync` to regenerate public
@@ -182,7 +183,8 @@ seccy service uninstall
 
 This installs `seccy-agent.service` under the user's systemd configuration and
 starts it with the graphical session. The service captures the installation's
-storage paths and optional `LOG_LEVEL`/`SECCY_KNOWN_HOSTS`. Reinstall after moving
+configuration/storage paths and optional `SECCY_KNOWN_HOSTS`. Set `log_level` in
+the user `config.toml` and restart the service to change logging. Reinstall after moving
 the binary or changing those settings. Inspect service startup errors with
 `journalctl --user -u seccy-agent.service`; structured application logs remain in
 the shared XDG state log directory.

@@ -3,12 +3,7 @@ use crate::{Output, ServiceCommand, emit, server};
 use anyhow::{Context, Result, ensure};
 use seccy_core::storage::Paths;
 use serde_json::json;
-use std::{
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{fs, io::Write, path::Path, process::Command};
 
 const UNIT: &str = "seccy-agent.service";
 
@@ -57,6 +52,18 @@ fn definition(executable: &Path, paths: &Paths) -> Result<String> {
         path(&paths.runtime.join("agent.sock"))?
     );
     let state = paths.state.parent().context("state parent")?;
+    let config = paths
+        .config
+        .parent()
+        .and_then(Path::parent)
+        .context("config home")?;
+    unit.push_str(&format!(
+        "Environment={}\n",
+        quote(&format!(
+            "XDG_CONFIG_HOME={}",
+            config.to_str().context("path is not UTF-8")?
+        ))?
+    ));
     unit.push_str(&format!(
         "Environment={}\n",
         quote(&format!(
@@ -64,25 +71,22 @@ fn definition(executable: &Path, paths: &Paths) -> Result<String> {
             state.to_str().context("path is not UTF-8")?
         ))?
     ));
-    for name in ["LOG_LEVEL", "SECCY_KNOWN_HOSTS"] {
-        if let Ok(value) = std::env::var(name) {
-            unit.push_str(&format!(
-                "Environment={}\n",
-                quote(&format!("{name}={value}"))?
-            ));
-        }
+    if let Ok(value) = std::env::var("SECCY_KNOWN_HOSTS") {
+        unit.push_str(&format!(
+            "Environment={}\n",
+            quote(&format!("SECCY_KNOWN_HOSTS={value}"))?
+        ));
     }
     unit.push_str("\n[Install]\nWantedBy=graphical-session.target\n");
     Ok(unit)
 }
 
 pub fn run(command: ServiceCommand, paths: &Paths, output: &Output) -> Result<()> {
-    let home = PathBuf::from(std::env::var_os("HOME").context("HOME is required")?);
-    ensure!(home.is_absolute(), "HOME must be absolute");
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home.join(".config"));
+    let config = paths
+        .config
+        .parent()
+        .and_then(Path::parent)
+        .context("config home")?;
     let directory = config.join("systemd/user");
     let file = directory.join(UNIT);
     match command {
@@ -144,6 +148,25 @@ pub fn run(command: ServiceCommand, paths: &Paths, output: &Output) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn service_captures_resolved_config_home_but_not_log_level() {
+        for config in [None, Some("/custom config"), Some("relative"), Some("")] {
+            let paths = Paths::resolve(Some(Path::new("/home/test")), |name| {
+                (name == "XDG_CONFIG_HOME")
+                    .then(|| config.map(Into::into))
+                    .flatten()
+            })
+            .unwrap();
+            let unit = definition(Path::new("/usr/bin/seccy"), &paths).unwrap();
+            let expected = if config == Some("/custom config") {
+                "/custom config"
+            } else {
+                "/home/test/.config"
+            };
+            assert!(unit.contains(&format!("Environment=\"XDG_CONFIG_HOME={expected}\"")));
+            assert!(!unit.contains("LOG_LEVEL="));
+        }
+    }
     #[test]
     fn systemd_exec_paths_cannot_inject_directives_or_specifiers() {
         assert!(quote("/tmp/a\nExecStart=bad").is_err());

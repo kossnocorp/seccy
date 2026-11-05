@@ -36,9 +36,6 @@ mod platform {
 #[derive(Cli)]
 #[usage(bin = "seccy", version)]
 struct App {
-    /// Configuration file
-    #[usage(long, global, default = "seccy.toml")]
-    config: PathBuf,
     /// Emit JSON (agent emits one object per line)
     #[usage(long, global)]
     json: bool,
@@ -63,9 +60,9 @@ enum Commands {
     Fnox(FnoxArgs),
     /// Idempotently create configured hardware-backed keys
     Provision(Empty),
-    /// List registered and current-config keys with their status and source
+    /// List registered and user-config keys with their status and source
     List(Empty),
-    /// Show information for a registered or current-config key
+    /// Show information for a registered or user-config key
     Get(KeyArgs),
     /// Write missing or outdated public-key files
     Sync(Empty),
@@ -346,7 +343,8 @@ fn run(app: App, output: &Output) -> Result<()> {
         Commands::Service(_) => "service",
         Commands::Gh(_) => "gh",
     };
-    tracing::info!(event = "command_started", command, config = %app.config.display());
+    let paths = seccy_core::storage::Paths::from_env()?;
+    tracing::info!(event = "command_started", command, config = %paths.config.display());
     let config = if matches!(
         app.command,
         Commands::Agent(_)
@@ -358,7 +356,7 @@ fn run(app: App, output: &Output) -> Result<()> {
     ) {
         Config::default()
     } else {
-        Config::load(&app.config)?
+        Config::load(&paths.config)?
     };
     run_platform(app, config, output)
 }
@@ -382,17 +380,17 @@ fn run_platform(app: App, config: Config, output: &Output) -> Result<()> {
         | Commands::Sync(_)
         | Commands::Remove(_)
         | Commands::Reset(_)) => {
-            inventory::run(command, &config, &app.config, &paths, output)?;
+            inventory::run(command, &config, &paths.config, &paths, output)?;
         }
         Commands::Service(args) => service::run(args.command, &paths, output)?,
         Commands::Gh(args) => match args.command {
-            GhCommand::Sync(args) => gh::run(args, &config, &app.config, &paths, output)?,
+            GhCommand::Sync(args) => gh::run(args, &config, &paths.config, &paths, output)?,
         },
         Commands::Agent(args) => server::run(args.socket, output)?,
         Commands::Encrypt(args) => {
             use anyhow::Context;
             let _lock = inventory::read_lock(&paths)?;
-            let state = inventory::view(&paths, &config, &app.config)?;
+            let state = inventory::view(&paths, &config, &paths.config)?;
             let identity = state
                 .identity(&store, &args.name)?
                 .context("key is not provisioned")?;

@@ -38,13 +38,22 @@ fn definition(executable: &Path, home: &Path, paths: &Paths) -> Result<plist::Va
     let mut env = plist::Dictionary::new();
     env.insert("HOME".into(), text(home)?.into());
     env.insert(
+        "XDG_CONFIG_HOME".into(),
+        text(
+            paths
+                .config
+                .parent()
+                .and_then(Path::parent)
+                .context("config home")?,
+        )?
+        .into(),
+    );
+    env.insert(
         "XDG_STATE_HOME".into(),
         text(paths.state.parent().context("state parent")?)?.into(),
     );
-    for name in ["LOG_LEVEL", "SECCY_KNOWN_HOSTS"] {
-        if let Ok(value) = std::env::var(name) {
-            env.insert(name.into(), value.into());
-        }
+    if let Ok(value) = std::env::var("SECCY_KNOWN_HOSTS") {
+        env.insert("SECCY_KNOWN_HOSTS".into(), value.into());
     }
     let mut dict = plist::Dictionary::new();
     dict.insert("Label".into(), LABEL.into());
@@ -173,5 +182,11 @@ mod tests {
             Some("/Users/test/.local/state/seccy/agent.sock")
         );
         assert_eq!(dict["KeepAlive"].as_boolean(), Some(true));
+        let env = dict["EnvironmentVariables"].as_dictionary().unwrap();
+        assert_eq!(
+            env["XDG_CONFIG_HOME"].as_string(),
+            Some("/Users/test/.config")
+        );
+        assert!(!env.contains_key("LOG_LEVEL"));
     }
 }

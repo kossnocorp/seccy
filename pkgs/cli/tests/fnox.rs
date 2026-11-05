@@ -11,6 +11,7 @@ fn command(bin: &Path, dir: &Path, subcommand: &str, flags: &[&str]) -> std::pro
         .current_dir(dir)
         .env("LOG_LEVEL", "off")
         .env("HOME", dir)
+        .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_DATA_HOME")
         .output()
         .unwrap()
@@ -34,7 +35,8 @@ fn bundled_plugin_can_be_located_after_relocation_and_through_symlinks() {
     let link = temp.path().join("seccy");
     std::os::unix::fs::symlink(moved.join("Contents/MacOS/seccy"), &link).unwrap();
     // Information commands must not parse the user's secrets configuration.
-    fs::write(temp.path().join("seccy.toml"), "invalid = [").unwrap();
+    fs::create_dir_all(temp.path().join(".config/seccy")).unwrap();
+    fs::write(temp.path().join(".config/seccy/config.toml"), "invalid = [").unwrap();
     let plugin = moved
         .canonicalize()
         .unwrap()
@@ -122,7 +124,8 @@ fn standalone_init_installs_embedded_source_and_updates_existing_plugin() {
     let temp = tempfile::tempdir().unwrap();
     let bin = temp.path().join("standalone-seccy");
     fs::copy(env!("CARGO_BIN_EXE_seccy"), &bin).unwrap();
-    fs::write(temp.path().join("seccy.toml"), "invalid = [").unwrap();
+    fs::create_dir_all(temp.path().join(".config/seccy")).unwrap();
+    fs::write(temp.path().join(".config/seccy/config.toml"), "invalid = [").unwrap();
     let provider = temp.path().join(".local/share/seccy/fnox/provider.lua");
     for flags in [
         vec!["--json"],

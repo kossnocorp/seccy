@@ -9,6 +9,7 @@ use std::{
 };
 
 pub struct Paths {
+    pub config: PathBuf,
     pub keys: PathBuf,
     pub runtime: PathBuf,
     pub state: PathBuf,
@@ -35,6 +36,7 @@ impl Paths {
             None => base("XDG_STATE_HOME", ".local/state")?.join("seccy"),
         };
         Ok(Self {
+            config: base("XDG_CONFIG_HOME", ".config")?.join("seccy/config.toml"),
             keys: base("XDG_STATE_HOME", ".local/state")?.join("seccy/keys"),
             state: base("XDG_STATE_HOME", ".local/state")?.join("seccy"),
             runtime,

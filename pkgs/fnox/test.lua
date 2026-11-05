@@ -22,11 +22,11 @@ package.preload["fnox.base64"] = function()
 end
 
 local provider = dofile("pkgs/fnox/provider.lua")
-local ctx = { options = { key = "secrets", bin = "/Applications/Seccy.app/Contents/MacOS/seccy", config = "/a path/seccy.toml", socket = "/a path/secrets.sock" } }
+local ctx = { options = { key = "secrets", bin = "/Applications/Seccy.app/Contents/MacOS/seccy", socket = "/a path/secrets.sock" } }
 response = { ok = true, value = "ciphertext" }
 assert(provider.encrypt(ctx, "secret\n\n") == "ciphertext")
 assert(calls[1].options.stdin == "secret\n\n")
-assert(table.concat(calls[1].argv, "|") == ctx.options.bin .. "|--json|--config|/a path/seccy.toml|encrypt|secrets")
+assert(table.concat(calls[1].argv, "|") == ctx.options.bin .. "|--json|encrypt|secrets")
 
 response = { ok = true, value_base64 = "encoded" }
 assert(provider.get(ctx, "ciphertext") == "secret\n\n")
@@ -38,7 +38,7 @@ assert(calls[3].options.stdin == "one" and calls[4].options.stdin == "two")
 
 response = { ok = true }
 provider.test(ctx)
-assert(calls[5].argv[5] == "crypto-check")
+assert(calls[5].argv[3] == "crypto-check")
 assert(calls[5].options.stdin == "")
 success = false
 response = { ok = false, error = "authorization cancelled" }

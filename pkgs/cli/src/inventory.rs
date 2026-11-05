@@ -195,11 +195,6 @@ pub fn run(
             for (name, key) in &config.keys {
                 if let Some(old) = state.keys.get(name) {
                     ensure!(
-                        old.config == source,
-                        "key {name} belongs to {}; remove it before using another config",
-                        old.config.display()
-                    );
-                    ensure!(
                         old.mode == key.mode,
                         "key {name} mode changed; remove it before reprovisioning"
                     );
@@ -222,6 +217,11 @@ pub fn run(
                 state.keys.insert(
                     name.clone(),
                     Record {
+                        config: if config.keys.contains_key(name) {
+                            source.clone()
+                        } else {
+                            record.config.clone()
+                        },
                         email,
                         github: config
                             .keys

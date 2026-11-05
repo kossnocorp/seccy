@@ -36,6 +36,10 @@ impl KeyStore for Store {
 #[test]
 fn xdg_paths_and_fallbacks() {
     let paths = Paths::resolve(Some(Path::new("/home/test")), |_| None).unwrap();
+    assert_eq!(
+        paths.config,
+        Path::new("/home/test/.config/seccy/config.toml")
+    );
     assert_eq!(paths.runtime, Path::new("/home/test/.local/state/seccy"));
     assert_eq!(
         paths.public_key("work"),
@@ -45,6 +49,7 @@ fn xdg_paths_and_fallbacks() {
         Some(PathBuf::from(match name {
             "XDG_RUNTIME_DIR" => "/run/user/501",
             "XDG_DATA_HOME" => "/data",
+            "XDG_CONFIG_HOME" => "/config",
             "XDG_STATE_HOME" => "/state",
             _ => unreachable!(),
         }))
@@ -52,8 +57,18 @@ fn xdg_paths_and_fallbacks() {
     .unwrap();
     assert_eq!(paths.runtime, Path::new("/run/user/501/seccy"));
     assert_eq!(paths.keys, Path::new("/state/seccy/keys"));
+    assert_eq!(paths.config, Path::new("/config/seccy/config.toml"));
     let paths = Paths::resolve(Some(Path::new("/home/test")), |_| Some("relative".into())).unwrap();
     assert_eq!(paths.runtime, Path::new("/home/test/.local/state/seccy"));
+    assert_eq!(
+        paths.config,
+        Path::new("/home/test/.config/seccy/config.toml")
+    );
+    let paths = Paths::resolve(Some(Path::new("/home/test")), |_| Some("".into())).unwrap();
+    assert_eq!(
+        paths.config,
+        Path::new("/home/test/.config/seccy/config.toml")
+    );
 }
 
 #[test]
@@ -124,7 +139,7 @@ fn inventory_and_sync_update_comments_without_changing_key() {
 #[test]
 fn config_missing_and_empty_are_valid_but_bad_config_is_not() {
     let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("seccy.toml");
+    let file = dir.path().join("config.toml");
     assert!(Config::load(&file).unwrap().keys.is_empty());
     for content in ["", "[keys]", "[user]\nemail='koss@nocorp.me'"] {
         std::fs::write(&file, content).unwrap();
@@ -136,7 +151,8 @@ fn config_missing_and_empty_are_valid_but_bad_config_is_not() {
         "[user]\nemail=''",
     ] {
         std::fs::write(&file, content).unwrap();
-        assert!(Config::load(&file).is_err());
+        let error = format!("{:#}", Config::load(&file).unwrap_err());
+        assert!(error.contains(file.to_str().unwrap()), "{error}");
     }
     assert!(Config::load(dir.path()).is_err());
 }
