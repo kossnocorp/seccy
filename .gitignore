@@ -1,5 +1,8 @@
 # Rust
 /target/
 
+# Node.js
+node_modules/
+
 # mise
 mise.local.toml
