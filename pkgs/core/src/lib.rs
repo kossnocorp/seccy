@@ -2,6 +2,7 @@
 pub mod agent;
 pub mod payload;
 pub mod process;
+mod prompt;
 pub mod state;
 pub mod storage;
 
@@ -102,29 +103,18 @@ pub struct Identity {
 impl Identity {
     pub fn sign_description(
         &self,
-        bytes: usize,
+        _bytes: usize,
         caller: &Caller,
         payload: &payload::Payload,
     ) -> String {
-        format!(
-            "{}\nKey: {}\nFingerprint: {}\nMode: {}; algorithm: ECDSA P-256/SHA-256; payload: {} bytes\n{}",
-            payload.description(),
-            self.name,
-            self.fingerprint,
-            self.mode.as_str(),
-            bytes,
-            caller.description()
-        )
+        payload.prompt(&self.name, caller)
     }
 
-    pub fn decrypt_description(&self, algorithm: &str, caller: &Caller) -> String {
-        format!(
-            "Decrypt secret\nKey: {}\nFingerprint: {}\nMode: {}; algorithm: {}\n{}",
-            self.name,
-            self.fingerprint,
-            self.mode.as_str(),
-            algorithm,
-            caller.description()
+    pub fn decrypt_description(&self, _algorithm: &str, caller: &Caller) -> String {
+        caller.request(
+            "Approve this decryption request?",
+            &self.name,
+            "to decrypt a secret",
         )
     }
 

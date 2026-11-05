@@ -46,6 +46,8 @@ fn decodes_real_hostbound_authentication_and_matches_known_hosts() {
     assert!(host.known_hosts[3].revoked);
     assert!(payload.description().contains("not a verified destination"));
     assert!(payload.description().contains("[REVOKED]"));
+    // Revocation must remain visible even when its match is beyond the summary limit.
+    assert!(payload.summary().contains("[REVOKED]"));
 }
 
 #[test]
@@ -90,6 +92,7 @@ fn plain_authentication_and_git_signature_have_distinct_descriptions() {
     ));
     assert!(decoded.description().contains("destination unknown"));
     assert!(decoded.description().contains("git\\nspoofed text"));
+    assert!(decoded.summary().contains("No server host key included"));
 
     let mut signing = b"SSHSIG".to_vec();
     string(&mut signing, b"git");
@@ -99,6 +102,7 @@ fn plain_authentication_and_git_signature_have_distinct_descriptions() {
     let decoded = Payload::decode(&signing, &key);
     assert!(matches!(decoded, Payload::SshSignature { ref namespace, .. } if namespace == "git"));
     assert!(decoded.description().contains("namespace \"git\""));
+    assert!(decoded.summary().is_empty());
     signing.pop();
     assert!(matches!(Payload::decode(&signing, &key), Payload::Unknown));
 }

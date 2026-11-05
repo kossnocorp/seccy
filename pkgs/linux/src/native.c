@@ -59,6 +59,7 @@ static char *pin_prompt(const char *details) {
     GcrPrompt *prompt = gcr_system_prompt_open(30, NULL, &error);
     if (error) g_error_free(error);
     if (!prompt) return NULL;
+    gcr_prompt_set_title(prompt, "Seccy");
     gcr_prompt_set_message(prompt, "Seccy: enter your security key PIN");
     gcr_prompt_set_description(prompt, details);
     const char *pin = gcr_prompt_password_run(prompt, NULL, &error);
@@ -105,8 +106,14 @@ static int perform(FidoWork *work, const char *details) {
     GcrPrompt *prompt = gcr_system_prompt_open(30, NULL, &error);
     if (error) g_error_free(error);
     if (!prompt) return -1;
-    gcr_prompt_set_message(prompt, "Seccy: verify with your security key");
-    gcr_prompt_set_description(prompt, details);
+    gcr_prompt_set_title(prompt, "Seccy");
+    const char *body = strstr(details, "\n\n");
+    char *heading = body ? g_strndup(details, body - details) : g_strdup("Approve this request?");
+    char *description = g_strdup_printf("%s\n\nTouch the FIDO authenticator to approve this request.", body ? body + 2 : details);
+    gcr_prompt_set_message(prompt, heading);
+    gcr_prompt_set_description(prompt, description);
+    g_free(heading);
+    g_free(description);
     gcr_prompt_set_continue_label(prompt, "Waiting for security key");
     gcr_prompt_confirm_async(prompt, NULL, confirmed, work);
     GThread *thread = g_thread_new("seccy-fido", fido_worker, work);

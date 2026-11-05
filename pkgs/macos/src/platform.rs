@@ -206,9 +206,7 @@ fn authentication_context(mode: Mode, details: &str) -> Option<Retained<LAContex
     // SAFETY: this context is confined to one private-key operation.
     let context = unsafe { LAContext::new() };
     unsafe {
-        context.setLocalizedReason(&NSString::from_str(&format!(
-            "Authorize key use.\n{details}"
-        )));
+        context.setLocalizedReason(&NSString::from_str(details));
         context.setTouchIDAuthenticationAllowableReuseDuration(0.0);
         context.setLocalizedFallbackTitle(Some(&NSString::from_str("")));
     }
