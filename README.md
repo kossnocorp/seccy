@@ -540,18 +540,35 @@ the same name cannot decrypt old values.
 ### fnox setup
 
 Use **fnox 1.47.0 or newer**, with the Lua provider API described in the
-[fnox documentation](https://fnox.jdx.dev/providers/lua.html). The packaged app includes
-the plugin in `Seccy.app/Contents/Resources/fnox`. Link it in place without copying:
+[fnox documentation](https://fnox.jdx.dev/providers/lua.html). Install the plugin
+from the source embedded in the Rust binary, then link it in place:
 
 ```sh
+seccy fnox init
 fnox plugin link seccy "$(seccy fnox info --jq-raw .plugin_dir)"
 ```
 
-`seccy fnox info` shows the absolute plugin directory and provider file. It supports
-`--json`, `--jq`, and `--jq-raw`; JSON contains `ok`, `plugin_dir`, and
-`provider_path`. It resolves paths from the running executable, including when
-invoked through a symlink. Keep the app at a stable location after linking; if
-you move it, link the plugin again. An unpackaged binary reports an error.
+`init` writes `provider.lua` to `~/.local/share/seccy/fnox`, or
+`$XDG_DATA_HOME/seccy/fnox` when `XDG_DATA_HOME` is absolute. It works with a
+standalone binary and needs no source checkout or app resources. Run it again
+after upgrading seccy to replace the installed plugin with the embedded version.
+Installation also writes `metadata.json` beside `provider.lua`, recording the
+version from the CLI crate’s Cargo manifest (embedded at compile time).
+
+`seccy fnox info` first checks for the installed provider in that directory,
+then falls back to `Seccy.app/Contents/Resources/fnox`. Bundle paths are resolved
+from the running executable, including symlink invocation. If neither copy
+exists, it reports an error suggesting `seccy fnox init`.
+
+Both commands support `--json`, `--jq`, and `--jq-raw`; JSON contains `ok`,
+`plugin_dir`, `provider_path`, `version` (the selected plugin), and `binary_version`
+(the running CLI). Installed plugin versions are read from `metadata.json`;
+older installations without metadata report `version: null` until `init` is run
+again. The bundled plugin uses the binary’s version. Malformed metadata reports
+an error with instructions to repair it using `init`. Neither command requires
+a secrets configuration.
+When linking the in-app copy without running `init`, keep the app at a stable
+location or link again after moving it.
 
 For local development, link the source checkout instead:
 

@@ -41,7 +41,7 @@ struct App {
 
 #[derive(Subcommands)]
 enum Commands {
-    /// Show information about the bundled fnox plugin
+    /// Install or locate the fnox plugin
     Fnox(FnoxArgs),
     /// Idempotently create configured Secure Enclave keys
     Provision(Empty),
@@ -77,6 +77,8 @@ struct FnoxArgs {
 
 #[derive(Subcommands)]
 enum FnoxCommand {
+    /// Install or update the embedded plugin in the user data directory
+    Init(Empty),
     /// Show the installed plugin directory and provider file
     Info(Empty),
 }
@@ -253,6 +255,7 @@ fn run(app: App, output: &Output) -> Result<()> {
     if let Commands::Fnox(args) = &app.command {
         return match args.command {
             FnoxCommand::Info(_) => fnox::info(output),
+            FnoxCommand::Init(_) => fnox::init(output),
         };
     }
     let command = match &app.command {
