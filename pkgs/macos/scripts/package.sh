@@ -52,7 +52,9 @@ fi
 bundle="$root/target/Seccy.app"
 contents="$bundle/Contents"
 binaries="$contents/MacOS"
-mkdir -p "$binaries"
+plugin="$contents/Resources/fnox"
+mkdir -p "$binaries" "$plugin"
+cp "$root/pkgs/fnox/provider.lua" "$plugin/provider.lua"
 cp "$root/target/release/seccy" "$binaries/seccy"
 cp "$profile_path" "$contents/embedded.provisionprofile"
 

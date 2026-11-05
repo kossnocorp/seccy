@@ -5,6 +5,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use usage_rs::{Args, Cli, Subcommands};
 
+mod fnox;
 #[cfg(target_os = "macos")]
 mod gh;
 #[cfg(target_os = "macos")]
@@ -40,6 +41,8 @@ struct App {
 
 #[derive(Subcommands)]
 enum Commands {
+    /// Show information about the bundled fnox plugin
+    Fnox(FnoxArgs),
     /// Idempotently create configured Secure Enclave keys
     Provision(Empty),
     /// List registered and current-config keys with their status and source
@@ -64,6 +67,18 @@ enum Commands {
     Service(ServiceArgs),
     /// Manage GitHub SSH keys using gh
     Gh(GhArgs),
+}
+
+#[derive(Args)]
+struct FnoxArgs {
+    #[usage(subcommand)]
+    command: FnoxCommand,
+}
+
+#[derive(Subcommands)]
+enum FnoxCommand {
+    /// Show the installed plugin directory and provider file
+    Info(Empty),
 }
 
 #[derive(Args)]
@@ -235,7 +250,13 @@ fn main() {
 
 fn run(app: App, output: &Output) -> Result<()> {
     logging::init()?;
+    if let Commands::Fnox(args) = &app.command {
+        return match args.command {
+            FnoxCommand::Info(_) => fnox::info(output),
+        };
+    }
     let command = match &app.command {
+        Commands::Fnox(_) => unreachable!(),
         Commands::Provision(_) => "provision",
         Commands::List(_) => "list",
         Commands::Get(_) => "get",
@@ -277,6 +298,7 @@ fn run_platform(app: App, config: Config, output: &Output) -> Result<()> {
     let store = seccy_macos::SecureEnclave;
     let paths = Paths::from_env()?;
     match app.command {
+        Commands::Fnox(_) => unreachable!(),
         command @ (Commands::Provision(_)
         | Commands::List(_)
         | Commands::Get(_)

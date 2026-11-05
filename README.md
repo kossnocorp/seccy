@@ -540,8 +540,20 @@ the same name cannot decrypt old values.
 ### fnox setup
 
 Use **fnox 1.47.0 or newer**, with the Lua provider API described in the
-[fnox documentation](https://fnox.jdx.dev/providers/lua.html). The plugin lives at
-`pkgs/fnox/provider.lua`. Link this checkout for local development:
+[fnox documentation](https://fnox.jdx.dev/providers/lua.html). The packaged app includes
+the plugin in `Seccy.app/Contents/Resources/fnox`. Link it in place without copying:
+
+```sh
+fnox plugin link seccy "$(seccy fnox info --jq-raw .plugin_dir)"
+```
+
+`seccy fnox info` shows the absolute plugin directory and provider file. It supports
+`--json`, `--jq`, and `--jq-raw`; JSON contains `ok`, `plugin_dir`, and
+`provider_path`. It resolves paths from the running executable, including when
+invoked through a symlink. Keep the app at a stable location after linking; if
+you move it, link the plugin again. An unpackaged binary reports an error.
+
+For local development, link the source checkout instead:
 
 ```sh
 fnox plugin link seccy /absolute/path/to/seccy/pkgs/fnox
@@ -567,7 +579,8 @@ config = "/absolute/path/to/seccy.toml"
 # socket = "/absolute/path/to/secrets.sock"
 ```
 
-Alternatively set `plugin = "/absolute/path/to/seccy/pkgs/fnox"` directly.
+Alternatively set `plugin = "/absolute/path/to/Seccy.app/Contents/Resources/fnox"`
+directly, using the directory printed by `seccy fnox info --jq-raw .plugin_dir`.
 `bin` defaults to `seccy` on PATH. Use absolute `bin`, `config`, and `socket` option
 paths: Lua option paths do not receive fnox's config-relative path resolution or
 shell `~` expansion. The executable must stay inside its signed app bundle.
