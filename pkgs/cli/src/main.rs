@@ -35,6 +35,9 @@ struct App {
     /// Filter JSON with jq, printing string results without quotes
     #[usage(long, global)]
     jq_raw: Option<String>,
+    /// Filter JSON with jq; exit 1 for false/null, 4 for no results
+    #[usage(long, global)]
+    jq_exit_status: Option<String>,
     #[usage(subcommand)]
     command: Commands,
 }
@@ -173,12 +176,20 @@ fn main() {
             let mut json = false;
             let mut query = None;
             let mut raw_query = None;
+            let mut exit_query = None;
             let mut args = argv.iter();
             while let Some(arg) = args.next() {
                 if arg == "--" {
                     break;
                 }
-                if arg == "--jq-raw" {
+                if arg == "--jq-exit-status" {
+                    exit_query = args.next().and_then(|s| s.to_str());
+                } else if let Some(value) = arg
+                    .to_str()
+                    .and_then(|s| s.strip_prefix("--jq-exit-status="))
+                {
+                    exit_query = Some(value);
+                } else if arg == "--jq-raw" {
                     raw_query = args.next().and_then(|s| s.to_str());
                 } else if let Some(value) = arg.to_str().and_then(|s| s.strip_prefix("--jq-raw=")) {
                     raw_query = Some(value);
@@ -190,7 +201,7 @@ fn main() {
                     json = true;
                 }
             }
-            let output = match Output::new(json, query, raw_query) {
+            let output = match Output::new(json, query, raw_query, exit_query) {
                 Ok(output) => output,
                 Err(error) => {
                     eprintln!("{error:#}");
@@ -215,10 +226,19 @@ fn main() {
             } else {
                 print!("{}", exit.text);
             }
-            std::process::exit(exit.code);
+            std::process::exit(if exit.code == 0 {
+                output.exit_code()
+            } else {
+                exit.code
+            });
         }
     };
-    let output = match Output::new(app.json, app.jq.as_deref(), app.jq_raw.as_deref()) {
+    let output = match Output::new(
+        app.json,
+        app.jq.as_deref(),
+        app.jq_raw.as_deref(),
+        app.jq_exit_status.as_deref(),
+    ) {
         Ok(output) => output,
         Err(error) => {
             eprintln!("{error:#}");
@@ -248,6 +268,7 @@ fn main() {
         }
         std::process::exit(1);
     }
+    std::process::exit(output.exit_code());
 }
 
 fn run(app: App, output: &Output) -> Result<()> {

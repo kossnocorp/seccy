@@ -198,14 +198,29 @@ seccy agent --jq 'select(.event == "signed") | .key'
 
 Use `--jq-raw '<expression>'` instead of `--jq` for jq-style raw output: string
 results are printed without quotes or JSON escaping, followed by a newline.
-Other values remain JSON. Both options override `--json` and cannot be combined.
+Other values remain JSON.
+
+Use `--jq-exit-status '<expression>'` for JSON output with jq's `-e` behavior:
+exit 0 when the last result is neither `false` nor `null`, 1 for either of those,
+or 4 when no results were produced. Empty strings, zero, and empty arrays/objects
+count as success. All three query options override `--json` and are mutually exclusive.
+
+```sh
+if seccy fnox info --jq-exit-status '.version != null' >/dev/null; then
+  echo "Plugin version is known"
+fi
+```
+
+For agent streams, the last emitted result determines the status when the command
+ends normally; an event producing no results leaves the previous status unchanged.
 
 Results from `--jq` use jq-style pretty-printed JSON: strings remain quoted, each result is
 written separately, and `empty` / unmatched `select` produce no output. Agent
 events are filtered individually. Decryption queries receive `value_base64`,
 just like `--json`. Help and command-error JSON responses can also be queried.
-Command failures retain their nonzero exit status; `false`, `null`, or no query
-results do not themselves cause failure. Query syntax/compilation errors fail
+Command failures retain their nonzero exit status, even if the query returns true.
+With `--jq` and `--jq-raw`, `false`, `null`, or no query results do not themselves
+cause failure. Query syntax/compilation errors fail
 before the command runs; evaluation errors go to stderr and exit nonzero (earlier
 results may already have been written). Queries affect output, not command actions.
 

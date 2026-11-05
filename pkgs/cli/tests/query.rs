@@ -174,3 +174,58 @@ fn agent_filters_ready_and_request_error_events() {
     stdout.read_line(&mut line).unwrap();
     assert_eq!(line, "\"request_error\"\n");
 }
+
+#[test]
+fn exit_status_queries_use_last_result_for_commands_and_help() {
+    for prefix in [vec!["fnox", "init"], vec!["--help"]] {
+        for (query, expected, code) in [
+            ("null", "null\n", 1),
+            ("false", "false\n", 1),
+            ("empty", "", 4),
+            ("true", "true\n", 0),
+            ("0", "0\n", 0),
+            ("\"\"", "\"\"\n", 0),
+            ("[]", "[]\n", 0),
+            ("{}", "{}\n", 0),
+            ("false, true", "false\ntrue\n", 0),
+            ("true, null", "true\nnull\n", 1),
+            ("true, empty", "true\n", 0),
+        ] {
+            let mut args = prefix.clone();
+            args.extend(["--json", "--jq-exit-status", query]);
+            let result = run(&args);
+            assert_eq!(result.status.code(), Some(code), "{args:?}: {result:?}");
+            assert_eq!(result.stdout, expected.as_bytes());
+            assert!(result.stderr.is_empty(), "{result:?}");
+        }
+    }
+    let result = run(&["--jq-exit-status=.version != null", "fnox", "init"]);
+    assert_eq!(result.status.code(), Some(0));
+    assert_eq!(result.stdout, b"true\n");
+}
+
+#[test]
+fn exit_status_queries_preserve_errors_and_reject_conflicting_flags() {
+    for args in [
+        vec!["unknown", "--jq-exit-status=true"],
+        vec!["fnox", "info", "--jq-exit-status", "true"],
+    ] {
+        let result = run(&args);
+        assert!(!result.status.success());
+        assert_eq!(result.stdout, b"true\n");
+    }
+    for query in [".[", "unknown_function", "true, error(\"oops\")"] {
+        let result = run(&["--help", "--jq-exit-status", query]);
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("query:"));
+    }
+    for flag in ["--jq", "--jq-raw"] {
+        for prefix in [vec!["--help"], vec!["fnox", "init"]] {
+            let mut args = prefix;
+            args.extend([flag, ".", "--jq-exit-status", "."]);
+            let result = run(&args);
+            assert!(!result.status.success());
+            assert!(String::from_utf8_lossy(&result.stderr).contains("cannot be used together"));
+        }
+    }
+}

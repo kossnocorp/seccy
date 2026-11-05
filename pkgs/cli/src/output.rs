@@ -8,7 +8,13 @@ use jaq_core::{
 use jaq_json::Val;
 use jaq_std::ValT;
 use serde_json::Value;
-use std::{io::Write, sync::Arc};
+use std::{
+    io::Write,
+    sync::{
+        Arc,
+        atomic::{AtomicI32, Ordering},
+    },
+};
 
 type Filter = jaq_core::Filter<data::JustLut<Val>>;
 
@@ -17,6 +23,7 @@ pub struct Output {
     json: bool,
     raw: bool,
     query: Option<Arc<Filter>>,
+    exit_status: Option<Arc<AtomicI32>>,
 }
 
 /// Kept distinct from command errors: never run a failed filter on its own error.
@@ -32,13 +39,23 @@ impl std::fmt::Display for QueryError {
 impl std::error::Error for QueryError {}
 
 impl Output {
-    pub fn new(json: bool, query: Option<&str>, raw_query: Option<&str>) -> Result<Self> {
+    pub fn new(
+        json: bool,
+        query: Option<&str>,
+        raw_query: Option<&str>,
+        exit_query: Option<&str>,
+    ) -> Result<Self> {
         anyhow::ensure!(
-            query.is_none() || raw_query.is_none(),
-            "--jq and --jq-raw cannot be used together"
+            [query, raw_query, exit_query]
+                .iter()
+                .filter(|q| q.is_some())
+                .count()
+                <= 1,
+            "--jq, --jq-raw, and --jq-exit-status cannot be used together"
         );
         let raw = raw_query.is_some();
-        let query = query.or(raw_query);
+        let exit_status = exit_query.map(|_| Arc::new(AtomicI32::new(4)));
+        let query = query.or(raw_query).or(exit_query);
         let query = query
             .map(|code| {
                 let defs = jaq_core::defs()
@@ -58,7 +75,19 @@ impl Output {
                 Ok::<_, anyhow::Error>(Arc::new(filter))
             })
             .transpose()?;
-        Ok(Self { json, raw, query })
+        Ok(Self {
+            json,
+            raw,
+            query,
+            exit_status,
+        })
+    }
+
+    /// Status of the last emitted result across all responses (including agent events).
+    pub fn exit_code(&self) -> i32 {
+        self.exit_status
+            .as_ref()
+            .map_or(0, |status| status.load(Ordering::Relaxed))
     }
 
     pub fn structured(&self) -> bool {
@@ -90,6 +119,12 @@ impl Output {
                     jaq_json::write::write(out, &pp, 0, &value)?;
                 }
                 writeln!(out)?;
+                if let Some(status) = &self.exit_status {
+                    status.store(
+                        i32::from(matches!(value, Val::Null | Val::Bool(false))),
+                        Ordering::Relaxed,
+                    );
+                }
             }
         } else if self.json {
             writeln!(out, "{value}")?;
@@ -98,5 +133,28 @@ impl Output {
         }
         out.flush()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exit_status_tracks_results_across_cloned_stream_outputs() {
+        let output = Output::new(false, None, None, Some(".[]")).unwrap();
+        let clone = output.clone();
+        let mut bytes = Vec::new();
+        assert_eq!(output.exit_code(), 4);
+        clone
+            .write(&mut bytes, serde_json::json!([false]), "")
+            .unwrap();
+        assert_eq!(output.exit_code(), 1);
+        output.write(&mut bytes, serde_json::json!([]), "").unwrap();
+        assert_eq!(output.exit_code(), 1);
+        clone
+            .write(&mut bytes, serde_json::json!([true]), "")
+            .unwrap();
+        assert_eq!(output.exit_code(), 0);
     }
 }
