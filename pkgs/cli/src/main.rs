@@ -6,20 +6,33 @@ use std::path::PathBuf;
 use usage_rs::{Args, Cli, Subcommands};
 
 mod fnox;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod gh;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod inventory;
 mod logging;
 mod output;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod secrets;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod server;
 #[cfg(target_os = "macos")]
 mod service;
 
-/// Secure Enclave SSH authentication and Git signing
+#[cfg(target_os = "linux")]
+#[path = "service_linux.rs"]
+mod service;
+
+#[cfg(target_os = "macos")]
+mod platform {
+    pub use seccy_macos::{MAX_SECRET_BYTES, SecureEnclave as Store, caller};
+}
+#[cfg(target_os = "linux")]
+mod platform {
+    pub use seccy_linux::{MAX_SECRET_BYTES, Vault as Store, caller};
+}
+
+/// Hardware-backed SSH authentication, Git signing, and secret encryption
 #[derive(Cli)]
 #[usage(bin = "seccy", version)]
 struct App {
@@ -44,9 +57,11 @@ struct App {
 
 #[derive(Subcommands)]
 enum Commands {
+    /// Initialize the Linux TPM/FIDO vault
+    Init(InitArgs),
     /// Install or locate the fnox plugin
     Fnox(FnoxArgs),
-    /// Idempotently create configured Secure Enclave keys
+    /// Idempotently create configured hardware-backed keys
     Provision(Empty),
     /// List registered and current-config keys with their status and source
     List(Empty),
@@ -60,7 +75,7 @@ enum Commands {
     Encrypt(KeyArgs),
     /// Decrypt ciphertext from stdin through the running agent
     Decrypt(SecretArgs),
-    /// Check the running agent and selected encryption key without Touch ID
+    /// Check the running agent and selected encryption key without a private operation
     CryptoCheck(SecretArgs),
     /// Delete a key from the registry, public files, and Keychain
     Remove(RemoveArgs),
@@ -70,6 +85,16 @@ enum Commands {
     Service(ServiceArgs),
     /// Manage GitHub SSH keys using gh
     Gh(GhArgs),
+}
+
+#[derive(Args)]
+struct InitArgs {
+    /// Enumerate connected FIDO authenticators without enrolling
+    #[usage(long)]
+    list: bool,
+    /// Device path selected from init --list (used only during enrollment)
+    #[usage(long)]
+    device: Option<String>,
 }
 
 #[derive(Args)]
@@ -246,7 +271,7 @@ fn main() {
         }
     };
     if let Err(error) = run(app, &output) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if error.is::<gh::CommandFailed>() {
             std::process::exit(1);
         }
@@ -279,7 +304,34 @@ fn run(app: App, output: &Output) -> Result<()> {
             FnoxCommand::Init(_) => fnox::init(output),
         };
     }
+    if let Commands::Init(args) = &app.command {
+        #[cfg(target_os = "linux")]
+        {
+            let result = seccy_linux::initialize(args.device.as_deref(), args.list)?;
+            let text = if args.list {
+                result["devices"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                format!(
+                    "Linux vault ready: {}",
+                    result["vault"].as_str().unwrap_or_default()
+                )
+            };
+            return output.emit(result, &text);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (&args.device, args.list);
+            anyhow::bail!("init is only needed on Linux; use provision on macOS");
+        }
+    }
     let command = match &app.command {
+        Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),
         Commands::Provision(_) => "provision",
         Commands::List(_) => "list",
@@ -311,17 +363,18 @@ fn run(app: App, output: &Output) -> Result<()> {
     run_platform(app, config, output)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn run_platform(_: App, _: Config, _: &Output) -> Result<()> {
     anyhow::bail!("Secure Enclave operations require macOS")
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn run_platform(app: App, config: Config, output: &Output) -> Result<()> {
     use seccy_core::storage::Paths;
-    let store = seccy_macos::SecureEnclave;
+    let store = platform::Store;
     let paths = Paths::from_env()?;
     match app.command {
+        Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),
         command @ (Commands::Provision(_)
         | Commands::List(_)
@@ -343,7 +396,7 @@ fn run_platform(app: App, config: Config, output: &Output) -> Result<()> {
             let identity = state
                 .identity(&store, &args.name)?
                 .context("key is not provisioned")?;
-            let input = secrets::read_stdin(seccy_macos::MAX_SECRET_BYTES)?;
+            let input = secrets::read_stdin(platform::MAX_SECRET_BYTES)?;
             let value = store.encrypt(&identity, &input)?;
             emit(output, json!({"ok": true, "value": value}), &value)?;
         }

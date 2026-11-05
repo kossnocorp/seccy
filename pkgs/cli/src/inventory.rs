@@ -1,3 +1,4 @@
+use crate::platform;
 use crate::{Commands, server};
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
@@ -65,7 +66,7 @@ impl Cached {
         let keys = state
             .keys
             .keys()
-            .map(|name| state.identity(&seccy_macos::SecureEnclave, name))
+            .map(|name| state.identity(&platform::Store, name))
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
@@ -138,7 +139,7 @@ fn reported_info(
     source: &Path,
     name: &str,
 ) -> Result<Option<KeyInfo>> {
-    let mut info = state.info(&seccy_macos::SecureEnclave, paths, name)?;
+    let mut info = state.info(&platform::Store, paths, name)?;
     if let Some(info) = &mut info
         && matches!(info.status, seccy_core::storage::KeyStatus::NotProvisioned)
         && config.keys.contains_key(name)
@@ -186,7 +187,7 @@ pub fn run(
     } else {
         server::lock(&paths.state.join("state.lock"))?
     };
-    let store = seccy_macos::SecureEnclave;
+    let store = platform::Store;
     let mut state = State::load(paths)?;
     match command {
         Commands::Provision(_) => {

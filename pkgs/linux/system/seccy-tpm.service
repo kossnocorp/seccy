@@ -1,0 +1,33 @@
+[Unit]
+Description=Seccy constrained TPM broker
+After=systemd-sysusers.service
+
+[Service]
+ExecStart=/usr/local/libexec/seccy-tpm
+User=seccy-tpm
+Group=seccy-tpm
+SupplementaryGroups=tss
+StateDirectory=seccy-tpm
+StateDirectoryMode=0700
+RuntimeDirectory=seccy-tpm
+RuntimeDirectoryMode=0755
+UMask=0077
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+TasksMax=32
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

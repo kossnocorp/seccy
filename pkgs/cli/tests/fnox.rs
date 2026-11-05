@@ -201,3 +201,27 @@ fn installed_version_is_persisted_read_and_refreshed() {
         format!("{}\n", env!("CARGO_PKG_VERSION")).as_bytes()
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_installation_resolves_provider_through_command_link() {
+    let temp = tempfile::tempdir().unwrap();
+    let installation = temp.path().join("custom-data/seccy");
+    fs::create_dir_all(installation.join("bin")).unwrap();
+    fs::create_dir_all(installation.join("fnox")).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_seccy"), installation.join("bin/seccy")).unwrap();
+    fs::write(
+        installation.join("fnox/provider.lua"),
+        include_str!("../../fnox/provider.lua"),
+    )
+    .unwrap();
+    let link = temp.path().join("seccy");
+    std::os::unix::fs::symlink(installation.join("bin/seccy"), &link).unwrap();
+    let result = run(&link, temp.path(), &["--json"]);
+    assert!(result.status.success(), "{result:?}");
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(
+        value["provider_path"],
+        installation.join("fnox/provider.lua").to_str().unwrap()
+    );
+}

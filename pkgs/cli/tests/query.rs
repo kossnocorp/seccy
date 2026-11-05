@@ -24,7 +24,7 @@ fn query_filters_help_and_parse_errors() {
     assert!(error.stderr.is_empty());
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn queries_override_json_and_preserve_jq_stream_semantics() {
     for flags in [vec!["list"], vec!["--json", "list"], vec!["list", "--json"]] {
@@ -103,7 +103,7 @@ fn raw_queries_handle_strings_json_and_parser_responses() {
     assert!(String::from_utf8_lossy(&result.stderr).contains("cannot be used together"));
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn raw_queries_work_on_command_results() {
     for args in [
@@ -116,7 +116,7 @@ fn raw_queries_work_on_command_results() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn command_errors_are_filtered_but_query_errors_are_not() {
     for command in [
@@ -137,7 +137,7 @@ fn command_errors_are_filtered_but_query_errors_are_not() {
     assert!(String::from_utf8_lossy(&result.stderr).contains("oops"));
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn agent_filters_ready_and_request_error_events() {
     use std::{

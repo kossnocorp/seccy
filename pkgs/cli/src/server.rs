@@ -1,3 +1,4 @@
+use crate::platform;
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use seccy_core::agent;
@@ -190,7 +191,7 @@ fn serve(
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(120)))?;
     stream.set_write_timeout(Some(Duration::from_secs(120)))?;
-    let connected = seccy_macos::caller(&stream)?;
+    let connected = platform::caller(&stream)?;
     tracing::info!(event = "client_connected", caller_json = %serde_json::to_string(&connected)?);
     while let Some(request) = agent::read_frame(&mut stream)? {
         // Serialize biometric prompts and notification delivery across clients.
@@ -203,7 +204,7 @@ fn serve(
         } else {
             None
         };
-        let caller = seccy_macos::caller(&stream)?;
+        let caller = platform::caller(&stream)?;
         ensure!(caller.pid == connected.pid, "socket peer changed");
         if let (Some(before), Some(now)) = (&connected.process, &caller.process) {
             ensure!(
@@ -215,12 +216,7 @@ fn serve(
             );
         }
         let (_state_lock, current_keys) = keys.keys()?;
-        let response = match agent::respond(
-            &seccy_macos::SecureEnclave,
-            &current_keys,
-            &caller,
-            &request,
-        ) {
+        let response = match agent::respond(&platform::Store, &current_keys, &caller, &request) {
             Ok(response) => response,
             Err(error) => {
                 event_error(output, &error)?;

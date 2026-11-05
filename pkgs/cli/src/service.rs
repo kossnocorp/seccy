@@ -41,17 +41,6 @@ fn definition(executable: &Path, home: &Path, paths: &Paths) -> Result<plist::Va
         "XDG_STATE_HOME".into(),
         text(paths.state.parent().context("state parent")?)?.into(),
     );
-    env.insert(
-        "XDG_DATA_HOME".into(),
-        text(
-            paths
-                .keys
-                .parent()
-                .and_then(Path::parent)
-                .context("data parent")?,
-        )?
-        .into(),
-    );
     for name in ["LOG_LEVEL", "SECCY_KNOWN_HOSTS"] {
         if let Ok(value) = std::env::var(name) {
             env.insert(name.into(), value.into());

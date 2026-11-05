@@ -1,3 +1,4 @@
+use crate::platform;
 use anyhow::{Context, Result, ensure};
 use seccy_core::{Config, Github, storage::Paths};
 use serde::{Deserialize, Serialize};
@@ -157,11 +158,9 @@ pub fn run(
             .get(name)
             .map_or(record.github, |key| key.github);
         let Some(kind) = kind else { continue };
-        let identity = state
-            .identity(&seccy_macos::SecureEnclave, name)?
-            .with_context(|| {
-                format!("GitHub key {name} is not provisioned; run seccy provision first")
-            })?;
+        let identity = state.identity(&platform::Store, name)?.with_context(|| {
+            format!("GitHub key {name} is not provisioned; run seccy provision first")
+        })?;
         desired.push(Key {
             kind,
             title: format!("{prefix}{name}"),

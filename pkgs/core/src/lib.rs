@@ -1,6 +1,7 @@
 //! Portable configuration, key-store interface, and OpenSSH agent protocol.
 pub mod agent;
 pub mod payload;
+pub mod process;
 pub mod state;
 pub mod storage;
 
@@ -98,6 +99,34 @@ pub struct Identity {
 }
 
 impl Identity {
+    pub fn sign_description(
+        &self,
+        bytes: usize,
+        caller: &Caller,
+        payload: &payload::Payload,
+    ) -> String {
+        format!(
+            "{}\nKey: {}\nFingerprint: {}\nMode: {}; algorithm: ECDSA P-256/SHA-256; payload: {} bytes\n{}",
+            payload.description(),
+            self.name,
+            self.fingerprint,
+            self.mode.as_str(),
+            bytes,
+            caller.description()
+        )
+    }
+
+    pub fn decrypt_description(&self, algorithm: &str, caller: &Caller) -> String {
+        format!(
+            "Decrypt secret\nKey: {}\nFingerprint: {}\nMode: {}; algorithm: {}\n{}",
+            self.name,
+            self.fingerprint,
+            self.mode.as_str(),
+            algorithm,
+            caller.description()
+        )
+    }
+
     pub fn with_user(mut self, user: &UserConfig) -> Self {
         let comment = user.email.as_deref().unwrap_or(&self.name);
         self.public_key = format!(

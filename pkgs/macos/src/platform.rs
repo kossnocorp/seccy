@@ -158,13 +158,7 @@ impl SecureEnclave {
 
     pub fn decrypt(&self, expected: &Identity, value: &str, caller: &Caller) -> Result<Vec<u8>> {
         let ciphertext = decode_envelope(value, expected)?;
-        let details = format!(
-            "Decrypt secret\nKey: {}\nFingerprint: {}\nMode: {}; algorithm: ECIES P-256/SHA-256/AES-GCM\n{}",
-            expected.name,
-            expected.fingerprint,
-            expected.mode.as_str(),
-            caller.description()
-        );
+        let details = expected.decrypt_description("ECIES P-256/SHA-256/AES-GCM", caller);
         let context = authentication_context(expected.mode, &details);
         let key = lookup_with_context(&expected.name, expected.mode, as_cf_context(&context))?
             .context("key no longer exists")?;
@@ -309,15 +303,7 @@ impl KeyStore for SecureEnclave {
         caller: &Caller,
         payload: &seccy_core::payload::Payload,
     ) -> Result<Vec<u8>> {
-        let details = format!(
-            "{}\nKey: {}\nFingerprint: {}\nMode: {}; algorithm: ECDSA P-256/SHA-256; payload: {} bytes\n{}",
-            payload.description(),
-            expected.name,
-            expected.fingerprint,
-            expected.mode.as_str(),
-            message.len(),
-            caller.description()
-        );
+        let details = expected.sign_description(message.len(), caller, payload);
         // Fresh context for every signature, attached to the actual key operation.
         // Keychain ACLs still enforce biometryCurrentSet; this only customizes UI.
         let context = authentication_context(expected.mode, &details);

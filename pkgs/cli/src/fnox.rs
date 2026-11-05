@@ -91,12 +91,17 @@ pub fn info(output: &Output) -> Result<()> {
     let contents = binaries
         .parent()
         .context("executable has no parent directory")?;
-    ensure!(
-        binaries.file_name().is_some_and(|name| name == "MacOS")
-            && contents.file_name().is_some_and(|name| name == "Contents"),
-        "fnox plugin is not installed or bundled with this executable; run seccy fnox init or use the packaged Seccy.app"
-    );
-    let plugin_dir = contents.join("Resources/fnox");
+    let plugin_dir = if binaries.file_name().is_some_and(|name| name == "MacOS")
+        && contents.file_name().is_some_and(|name| name == "Contents")
+    {
+        contents.join("Resources/fnox")
+    } else if cfg!(target_os = "linux") && binaries.file_name().is_some_and(|name| name == "bin") {
+        contents.join("fnox")
+    } else {
+        anyhow::bail!(
+            "fnox plugin is not installed or bundled with this executable; run seccy fnox init or use the packaged Seccy.app or Linux installation"
+        )
+    };
     let provider_path = plugin_dir.join("provider.lua");
     ensure!(
         provider_path.is_file(),

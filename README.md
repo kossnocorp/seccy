@@ -1,5 +1,8 @@
 # seccy
 
+Linux/GNOME TPM + FIDO2 support: see [Linux setup](docs/linux/README.md) and
+[Linux binary signing](docs/linux/bin-signing.md). macOS setup is below.
+
 Config-driven Secure Enclave SSH agent and CLI, written in Rust with [usage](https://usage.jdx.dev/rust/quickstart).
 
 - SSH authentication, including Git over SSH.
@@ -228,7 +231,7 @@ results may already have been written). Queries affect output, not command actio
 
 | Item | Path | Default |
 | --- | --- | --- |
-| Public keys | `$XDG_DATA_HOME/seccy/keys/<name>.pub` | `~/.local/share/seccy/keys/<name>.pub` |
+| Public keys | `$XDG_STATE_HOME/seccy/keys/<name>.pub` | `~/.local/state/seccy/keys/<name>.pub` |
 | Agent socket | `$XDG_RUNTIME_DIR/seccy/agent.sock` | When unset: `$XDG_STATE_HOME/seccy/agent.sock`, default `~/.local/state/seccy/agent.sock` |
 | Key registry | `$XDG_STATE_HOME/seccy/state.toml` | `~/.local/state/seccy/state.toml` |
 | Secrets socket | Alongside the agent socket, named `secrets.sock` | `~/.local/state/seccy/secrets.sock` when runtime/state overrides are unset |
@@ -392,7 +395,7 @@ Set `SSH_AUTH_SOCK` to the socket path from the agent's `ready` event. With the 
 ```sshconfig
 Host github.com
     IdentityAgent ~/.local/state/seccy/agent.sock
-    IdentityFile ~/.local/share/seccy/keys/personal.pub
+    IdentityFile ~/.local/state/seccy/keys/personal.pub
     IdentitiesOnly yes
     ForwardAgent no
 ```
@@ -488,7 +491,7 @@ Requires Git 2.34+ and OpenSSH with SSH signing support. Register the public key
 ```sh
 export SSH_AUTH_SOCK="$HOME/.local/state/seccy/agent.sock" # or your XDG runtime socket
 git config --global gpg.format ssh
-git config --global user.signingkey "${XDG_DATA_HOME:-$HOME/.local/share}/seccy/keys/personal.pub"
+git config --global user.signingkey "${XDG_STATE_HOME:-$HOME/.local/state}/seccy/keys/personal.pub"
 git config --global commit.gpgsign true
 git commit -m 'Signed with Secure Enclave'
 ```

@@ -118,7 +118,7 @@ pub fn respond(
                 p256::ecdsa::Signature::from_der(&der).context("invalid ECDSA signature")?;
             let bytes = signature.to_bytes();
             let mut scalars = Vec::new();
-            for scalar in bytes.chunks_exact(32) {
+            for scalar in bytes.as_chunks::<32>().0 {
                 let first = scalar.iter().position(|b| *b != 0).unwrap_or(31);
                 let scalar = &scalar[first..];
                 let mut mpint = Vec::new();

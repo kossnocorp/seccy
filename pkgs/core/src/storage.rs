@@ -35,7 +35,7 @@ impl Paths {
             None => base("XDG_STATE_HOME", ".local/state")?.join("seccy"),
         };
         Ok(Self {
-            keys: base("XDG_DATA_HOME", ".local/share")?.join("seccy/keys"),
+            keys: base("XDG_STATE_HOME", ".local/state")?.join("seccy/keys"),
             state: base("XDG_STATE_HOME", ".local/state")?.join("seccy"),
             runtime,
         })

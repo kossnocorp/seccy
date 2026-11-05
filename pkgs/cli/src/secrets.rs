@@ -1,4 +1,5 @@
 //! Local secrets protocol. Payloads and responses must never enter tracing.
+use crate::platform;
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use seccy_core::agent;
@@ -81,7 +82,7 @@ pub fn request(
         .context("connect to seccy agent; start or restart the agent")?;
     stream.set_read_timeout(Some(Duration::from_secs(120)))?;
     stream.set_write_timeout(Some(Duration::from_secs(120)))?;
-    seccy_macos::caller(&stream)?;
+    platform::caller(&stream)?;
     agent::write_frame(
         &mut stream,
         &serde_json::to_vec(&Request {
@@ -110,7 +111,7 @@ pub fn serve(
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(120)))?;
     stream.set_write_timeout(Some(Duration::from_secs(120)))?;
-    let connected = seccy_macos::caller(&stream)?;
+    let connected = platform::caller(&stream)?;
     let result = (|| -> Result<Value> {
         let frame = agent::read_frame(&mut stream)?.context("empty secrets request")?;
         // Do not expose serde errors: they can contain client-supplied values.
@@ -127,14 +128,14 @@ pub fn serve(
         match request.operation.as_str() {
             "check" => {
                 ensure!(request.value.is_none(), "check does not accept a payload");
-                seccy_macos::SecureEnclave.crypto_check(identity)?;
+                platform::Store.crypto_check(identity)?;
                 Ok(
                     json!({"ok": true, "key": identity.name, "fingerprint": identity.fingerprint, "mode": identity.mode}),
                 )
             }
             "decrypt" => {
                 let value = request.value.context("missing ciphertext")?;
-                let caller = seccy_macos::caller(&stream)?;
+                let caller = platform::caller(&stream)?;
                 ensure!(caller.pid == connected.pid, "socket peer changed");
                 if let (Some(before), Some(now)) = (&connected.process, &caller.process) {
                     ensure!(
@@ -143,7 +144,7 @@ pub fn serve(
                         "socket peer process changed"
                     );
                 }
-                let plaintext = seccy_macos::SecureEnclave.decrypt(identity, &value, &caller)?;
+                let plaintext = platform::Store.decrypt(identity, &value, &caller)?;
                 Ok(json!({"ok": true, "value_base64": STANDARD.encode(plaintext)}))
             }
             _ => anyhow::bail!("unsupported secrets operation"),

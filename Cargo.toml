@@ -15,3 +15,4 @@ serde_json = "1"
 tracing = "0.1"
 seccy_core = { path = "pkgs/core" }
 seccy_macos = { path = "pkgs/macos" }
+seccy_linux = { path = "pkgs/linux" }

@@ -1,6 +1,6 @@
 use std::process::Command;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn destructive_commands_require_confirmation_and_accept_both_yes_flags() {
     let dir = tempfile::tempdir().unwrap();
@@ -46,7 +46,7 @@ fn destructive_commands_require_confirmation_and_accept_both_yes_flags() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn inventory_survives_missing_source_and_merges_another_config() {
     let dir = tempfile::tempdir().unwrap();
@@ -120,7 +120,7 @@ fn inventory_survives_missing_source_and_merges_another_config() {
     assert_eq!(displayed, value);
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn decrypt_cli_preserves_binary_and_newlines_without_logging_payloads() {
     use base64::{Engine, engine::general_purpose::STANDARD};
@@ -203,7 +203,7 @@ fn decrypt_cli_preserves_binary_and_newlines_without_logging_payloads() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn secrets_agent_rejects_unconfigured_keys_and_untrusted_requests() {
     use std::{
@@ -286,7 +286,7 @@ fn removed_commands_and_parse_errors_are_json() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn missing_config_means_empty_results() {
     let dir = tempfile::tempdir().unwrap();
@@ -322,7 +322,7 @@ fn missing_config_means_empty_results() {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn log_file_is_private_and_does_not_pollute_json_stdout() {
     use std::os::unix::fs::PermissionsExt;

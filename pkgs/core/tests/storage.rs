@@ -39,7 +39,7 @@ fn xdg_paths_and_fallbacks() {
     assert_eq!(paths.runtime, Path::new("/home/test/.local/state/seccy"));
     assert_eq!(
         paths.public_key("work"),
-        Path::new("/home/test/.local/share/seccy/keys/work.pub")
+        Path::new("/home/test/.local/state/seccy/keys/work.pub")
     );
     let paths = Paths::resolve(None, |name| {
         Some(PathBuf::from(match name {
@@ -51,7 +51,7 @@ fn xdg_paths_and_fallbacks() {
     })
     .unwrap();
     assert_eq!(paths.runtime, Path::new("/run/user/501/seccy"));
-    assert_eq!(paths.keys, Path::new("/data/seccy/keys"));
+    assert_eq!(paths.keys, Path::new("/state/seccy/keys"));
     let paths = Paths::resolve(Some(Path::new("/home/test")), |_| Some("relative".into())).unwrap();
     assert_eq!(paths.runtime, Path::new("/home/test/.local/state/seccy"));
 }

@@ -1,0 +1,9 @@
+# Bootstrap ####################################################################
+
+[bootstrap.packages]
+"dnf:gcc" = "latest"
+"dnf:pkgconf-pkg-config" = "latest"
+"dnf:libfido2-devel" = "latest"
+"dnf:tpm2-tss-devel" = "latest"
+"dnf:libsecret-devel" = "latest"
+"dnf:gcr-devel" = "latest"

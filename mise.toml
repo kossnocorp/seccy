@@ -4,12 +4,21 @@ monorepo_root = true
 [monorepo]
 config_roots = ["pkgs/*"]
 
+
+# Settings #####################################################################
+
+[settings]
+lockfile = true
+idiomatic_version_file_enable_tools = ["rust"] # Use rust-toolchain.toml
+
+
 [tools]
 
 # Stack ########################################################################
 
 node = "latest"
 pnpm = "latest"
+
 
 # Tasks ########################################################################
 
@@ -44,7 +53,38 @@ run = "bash pkgs/macos/scripts/package.sh"
 
 [tasks."package:check"]
 description = "Check the Bash packaging and notarization scripts"
-run = ["bash -n pkgs/macos/scripts/package.sh", "bash -n pkgs/macos/scripts/notarize.sh", "bash -n pkgs/macos/scripts/notarize-setup.sh"]
+run = [
+  "bash -n pkgs/macos/scripts/package.sh",
+  "bash -n pkgs/macos/scripts/notarize.sh",
+  "bash -n pkgs/macos/scripts/notarize-setup.sh",
+  "bash -n pkgs/linux/scripts/release.sh",
+  "bash -n pkgs/linux/scripts/setup-link.sh",
+]
+
+[tasks."linux:package"]
+description = "Build and package the Linux CLI and fnox provider"
+run = "bash pkgs/linux/scripts/release.sh package"
+
+[tasks."setup:link"]
+description = "Build and link a local Linux installation into ~/.local/bin (XDG-aware)"
+run = "bash pkgs/linux/scripts/setup-link.sh"
+
+[tasks."linux:sign"]
+description = "Sign the Linux archive using SECCY_RELEASE_KEY"
+raw = true
+run = "bash pkgs/linux/scripts/release.sh sign"
+
+[tasks."linux:verify"]
+description = "Verify the Linux archive using SECCY_ALLOWED_SIGNERS"
+run = "bash pkgs/linux/scripts/release.sh verify"
+
+[tasks."linux:sign:test"]
+description = "Check release verification rejects tampering and untrusted keys"
+run = "bash pkgs/linux/scripts/test-release.sh"
+
+[tasks."linux:tpm:test"]
+description = "Verify the native TPM backend against an isolated swtpm instance"
+run = "bash pkgs/linux/scripts/test-tpm.sh"
 
 [tasks."notarize:setup"]
 description = "Store Apple notarization credentials in Keychain (SECCY_APPLE_PASSWORD or interactive prompt)"
@@ -55,10 +95,3 @@ run = "bash pkgs/macos/scripts/notarize-setup.sh"
 description = "Build, sign, notarize and create target/Seccy-notarized.zip"
 depends = ["package"]
 run = "bash pkgs/macos/scripts/notarize.sh"
-
-
-# Settings #####################################################################
-
-[settings]
-lockfile = true
-idiomatic_version_file_enable_tools = ["rust"] # Use rust-toolchain.toml
