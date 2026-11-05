@@ -58,12 +58,24 @@ cp "$root/pkgs/fnox/provider.lua" "$plugin/provider.lua"
 cp "$root/target/release/seccy" "$binaries/seccy"
 cp "$profile_path" "$contents/embedded.provisionprofile"
 
+# Build the standard macOS icon sizes from the source artwork.
+iconset="$temporary/Seccy.iconset"
+mkdir -p "$iconset"
+for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$root/assets/icon.png" \
+        --out "$iconset/icon_${size}x${size}.png" >/dev/null
+    sips -z "$((size * 2))" "$((size * 2))" "$root/assets/icon.png" \
+        --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$contents/Resources/Seccy.icns"
+
 # plutil handles XML escaping; values are arguments rather than generated XML.
 info="$contents/Info.plist"
 plutil -create xml1 "$info"
 plutil -insert CFBundleIdentifier -string "$bundle_id" "$info"
 plutil -insert CFBundleName -string Seccy "$info"
 plutil -insert CFBundleExecutable -string seccy "$info"
+plutil -insert CFBundleIconFile -string Seccy.icns "$info"
 plutil -insert CFBundlePackageType -string APPL "$info"
 plutil -insert CFBundleVersion -string 1 "$info"
 plutil -insert CFBundleShortVersionString -string 0.1.0 "$info"

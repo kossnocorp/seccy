@@ -48,7 +48,7 @@ mise run package
 export PATH="$PWD/target/Seccy.app/Contents/MacOS:$PATH"
 ```
 
-Run the executable **inside** the bundle; retain the bundle and embedded profile together when installing it elsewhere. Keep the same app identifier, keychain group and signing team across upgrades. Signing and provisioning credentials are not included in this repository. The package task builds and signs; it does not notarize or distribute the application.
+Run the executable **inside** the bundle; retain the bundle and embedded profile together when installing it elsewhere. Keep the same app identifier, keychain group and signing team across upgrades. Signing and provisioning credentials are not included in this repository. The package task builds and signs; it does not notarize or distribute the application. It generates the macOS app icon from `assets/icon.png` using the built-in `sips` and `iconutil` tools.
 
 ### Notarize for another Mac
 
