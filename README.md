@@ -390,7 +390,7 @@ fi
 ssh-add -L
 ```
 
-Set `SSH_AUTH_SOCK` to the socket path from the agent's `ready` event. With the default macOS fallback, use `export SSH_AUTH_SOCK="$HOME/.local/state/seccy/agent.sock"`. Register `~/.local/share/seccy/keys/personal.pub` (or its XDG override) with your SSH server or Git hosting provider. Optionally select a particular key in `~/.ssh/config` (these paths assume the default macOS fallback):
+Set `SSH_AUTH_SOCK` to the socket path from the agent's `ready` event. With the default macOS fallback, use `export SSH_AUTH_SOCK="$HOME/.local/state/seccy/agent.sock"`. Register `~/.local/state/seccy/keys/personal.pub` (or its XDG override) with your SSH server or Git hosting provider. Optionally select a particular key in `~/.ssh/config` (these paths assume the default macOS fallback):
 
 ```sshconfig
 Host github.com
@@ -401,6 +401,122 @@ Host github.com
 ```
 
 The agent runs in the foreground until SIGINT/SIGTERM. `--socket` supports another location whose parent is also owner-only. Concurrent agents cannot own the same socket; a stale socket can be recovered on restart.
+
+### Multiple Git identities (personal and AI agent)
+
+One seccy agent can serve separate key pairs for multiple Git hosting accounts
+under the same OS user. Select both the SSH authentication key and the Git
+signing key for each identity: `user.signingkey` only controls commit/tag signing.
+Without explicit SSH key selection, SSH may try another account's key first.
+GitHub can authenticate that account successfully, then deny repository access
+without trying your other account. Git LFS makes separate SSH connections, so
+cancelling the wrong key's prompt is not a reliable workaround.
+
+For example, create `~/.config/seccy/config.toml`:
+
+```toml
+[keys.auth]
+mode = "prompt"
+
+[keys.signing]
+mode = "prompt"
+
+[keys.agent-auth]
+mode = "prompt"
+
+[keys.agent-signing]
+mode = "prompt"
+```
+
+Provision it explicitly (the default config path is `./seccy.toml`):
+
+```sh
+seccy --config "$HOME/.config/seccy/config.toml" provision
+```
+
+Register `auth.pub` and `signing.pub` with your personal hosting account as
+authentication and signing keys, respectively. Register `agent-auth.pub` and
+`agent-signing.pub` with the agent's account in the same way. These files are in
+`~/.local/state/seccy/keys/` by default. `github = "auth"` / `"signing"` classify
+keys for sync; they do not select an account. `seccy gh sync` targets the account
+authenticated by its GitHub CLI invocation, so do not sync both accounts' keys
+together to one account.
+
+Put personal identity settings in `~/.config/git/shared_user.config`:
+
+```gitconfig
+[user]
+    name = Your Name
+    email = you@example.com
+    signingkey = ~/.local/state/seccy/keys/signing.pub
+[core]
+    sshCommand = "ssh -o IdentitiesOnly=yes -i ~/.local/state/seccy/keys/auth.pub"
+```
+
+Put agent identity settings in `~/.config/git/agent_user.config`:
+
+```gitconfig
+[user]
+    name = Your Agent
+    email = agent@example.com
+    signingkey = ~/.local/state/seccy/keys/agent-signing.pub
+[core]
+    sshCommand = "ssh -o IdentitiesOnly=yes -i ~/.local/state/seccy/keys/agent-auth.pub"
+```
+
+Use `~/.config/git/config` for the normal shell:
+
+```gitconfig
+[include]
+    path = ./shared_user.config
+[gpg]
+    format = ssh
+[commit]
+    gpgsign = true
+```
+
+Use `~/.config/git/agent.config` for the agent shell:
+
+```gitconfig
+[include]
+    path = ./agent_user.config
+[gpg]
+    format = ssh
+[commit]
+    gpgsign = true
+```
+
+Merge these settings into existing configs, retaining shared includes as needed.
+Start a shell with the agent identity using:
+
+```sh
+AGENT=true GIT_CONFIG_GLOBAL="$HOME/.config/git/agent.config" "$SHELL"
+```
+
+`GIT_CONFIG_GLOBAL` selects the Git config; `AGENT` is only a convention for your
+tools and does not select keys in seccy. Both shells use the same agent socket
+configured above. `-i` selects a public key whose private key stays in seccy;
+`IdentitiesOnly=yes` prevents SSH from offering unrelated agent keys. Avoid
+additional `IdentityFile` entries for the same host in SSH config, since those
+also count as explicitly selected identities. Adjust public-key paths if using
+`XDG_STATE_HOME`.
+
+For remote/forwarded-agent shells, include the corresponding identity file in
+each remote Git config too, and make its public-key files available at the
+configured paths on the remote host. SSH must use the forwarded agent socket.
+
+Check the effective settings inside each shell:
+
+```sh
+git config --show-origin --get core.sshCommand
+git config --show-origin --get user.signingkey
+git ls-remote origin
+```
+
+Repository-local settings can override these global settings, and
+`GIT_SSH_COMMAND` overrides `core.sshCommand`. Key selection applies to Git SSH
+transport, including Git LFS; a standalone `ssh -T git@github.com` does not read
+Git's `core.sshCommand`.
 
 ### Start automatically at login
 
