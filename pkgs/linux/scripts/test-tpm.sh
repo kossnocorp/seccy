@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
-temporary=$(mktemp -d "${TMPDIR:-/tmp/opencode}/seccy-tpm.XXXXXXXX")
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/seccy-tpm.XXXXXXXX")
 cleanup() {
     if [[ -f "$temporary/pid" ]]; then kill "$(cat "$temporary/pid")" || true; fi
     rm -rf -- "$temporary"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
-temporary=$(mktemp -d "${TMPDIR:-/tmp/opencode}/seccy-release-test.XXXXXXXX")
+temporary=$(mktemp -d "${TMPDIR:-/tmp}/seccy-release-test.XXXXXXXX")
 trap 'rm -rf -- "$temporary"' EXIT
 export SECCY_RELEASE_KEY="$temporary/signing key"
 export SECCY_RELEASE_ARCHIVE="$temporary/release archive.tar.gz"
