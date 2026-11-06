@@ -37,6 +37,10 @@ fi
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/seccy-install.XXXXXXXX")
 trap 'rm -rf "$temporary"' EXIT
 if [[ -z $archive ]]; then
+    if [[ $os == Darwin && $arch == x86_64 ]]; then
+        echo 'Prebuilt macOS releases require Apple Silicon. On Apple Silicon, run from a native ARM64 terminal; Intel Macs require a locally built archive (--archive PATH).' >&2
+        exit 1
+    fi
     repository=${SECCY_REPOSITORY:-kossnocorp/seccy}
     base="https://github.com/$repository/releases"
     if [[ -z $version ]]; then

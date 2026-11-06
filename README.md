@@ -11,6 +11,9 @@ The installer sets up the complete app/binaries, fnox provider, keys and login
 agent, including the Linux TPM system service. Use `--install-only` for files only,
 or `--archive PATH` for a locally verified release archive.
 
+Prebuilt releases support macOS Apple Silicon and Linux x86_64/ARM64. Intel
+macOS requires building and packaging from source.
+
 Both platforms install beneath `$XDG_DATA_HOME/seccy`, defaulting to
 `~/.local/share/seccy` when the variable is unset, empty, or relative:
 

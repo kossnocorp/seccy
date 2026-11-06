@@ -36,12 +36,8 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          for platform in linux macos; do
-            extension=tar.gz
-            if [[ "$platform" == macos ]]; then extension=zip; fi
-            for arch in x86_64 aarch64; do
-              test -s "release-assets/seccy-$TAG-$platform-$arch.$extension"
-            done
+          for target in linux-x86_64.tar.gz linux-aarch64.tar.gz macos-aarch64.zip; do
+            test -s "release-assets/seccy-$TAG-$target"
           done
           cp scripts/install.sh release-assets/install.sh
           cd release-assets

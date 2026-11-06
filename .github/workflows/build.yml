@@ -33,9 +33,6 @@ jobs:
         include:
           - os: xcode-27
             arch: aarch64
-          # Xcode 27 runners are ARM64-only; use the latest Intel image.
-          - os: macos-26-intel
-            arch: x86_64
     runs-on: ${{ matrix.os }}
     env:
       SECCY_SIGNING_IDENTITY: ${{ vars.SECCY_SIGNING_IDENTITY }}
