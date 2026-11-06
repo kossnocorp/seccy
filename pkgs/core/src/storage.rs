@@ -118,7 +118,7 @@ pub fn key_info(
     };
     let identity = store
         .identity(name, key.mode)?
-        .map(|i| i.with_user(&config.user));
+        .map(|i| i.with_email(config.effective_email(name)));
     Ok(Some(KeyInfo::new(
         name,
         key.mode,

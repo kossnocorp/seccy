@@ -137,7 +137,6 @@ if needed. This is the sole configuration file, independent of the working direc
 ```toml
 log_level = "info"
 
-[user]
 email = "koss@nocorp.me"
 
 [keys.personal]
@@ -145,6 +144,7 @@ mode = "prompt"
 
 [keys.automation]
 mode = "notify"
+email = "automation@example.com"
 ```
 
 ```sh
@@ -166,7 +166,9 @@ With neither registry entries nor config entries, results are empty.
 
 `list` and `get` report `status` (`provisioned` or `not_provisioned`), `mode`, `public_key_path`, `public_key`, `fingerprint`, `synced`, and `config` (also shown in the Config column). Source paths are absolute, shortened to `~/…` when inside home. Provisioned registered keys show their provisioning source. Unprovisioned keys show the current config when it defines them, otherwise their recorded source. Missing key material is reported as null rather than failing the command. Actual keychain access errors remain errors. The agent advertises only provisioned, registered keys.
 
-Provisioning is idempotent by key name and mode, within the signed app's keychain group. It creates missing keys and persists their public files and registry records. Existing private keys are reused. `sync` writes missing/outdated public files for existing keys without creating private keys; unprovisioned keys are reported and skipped. Public-key comments use `[user].email`, or the key name when email is absent. Updating the source email and running `provision` updates the stored comment, not the private key or fingerprint. Identical public files are left untouched; replacements and registry writes are atomic.
+Provisioning is idempotent by key name and mode, within the signed app's keychain group. It creates missing keys and persists their public files and registry records. Existing private keys are reused. `sync` writes missing/outdated public files for existing keys without creating private keys; unprovisioned keys are reported and skipped. Public-key comments use the key's `email`, then the top-level `email`, then the key name when neither is set. Both email fields are optional; when present they must be nonempty and contain no whitespace or control characters. The old `[user]` configuration table is rejected.
+
+Provisioning stores each key's resolved email. Changing or removing an override and running `provision` updates the stored comment and public file using those fallback rules, without changing the private key or fingerprint. Until reprovisioning, registry-backed `list`, `get`, `sync`, and the agent retain the stored comments, even if the source config changes or disappears. Identical public files are left untouched; replacements and registry writes are atomic.
 
 Changing a registered key's mode is rejected. Choose another name, or explicitly
 remove the old key first.
@@ -269,7 +271,8 @@ results may already have been written). Queries affect output, not command actio
 Move your existing local configuration to the user `config.toml` location above.
 If you have multiple local files, merge their `[keys.<name>]` tables into that
 one file. Deduplicate identical names, resolve conflicting settings, preserve
-registered keys' modes, and choose one `[user].email` for the merged configuration.
+registered keys' modes, and choose a top-level `email` default with per-key
+`email` overrides where needed.
 Run `seccy provision` to register or reuse those keys and update their recorded
 source to the global path. Keys absent from the merged file remain registered.
 Local `seccy.toml` files are ignored, even when malformed; neither the current

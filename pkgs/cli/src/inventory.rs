@@ -28,6 +28,141 @@ fn log_view(state: &State, config: &Config, source: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use seccy_core::{Caller, Identity, Mode, payload::Payload};
+    use std::{collections::BTreeMap, sync::Mutex};
+
+    #[derive(Default)]
+    struct Store(Mutex<BTreeMap<String, Identity>>);
+
+    impl KeyStore for Store {
+        fn provision(&self, name: &str, mode: Mode) -> Result<(Identity, bool)> {
+            let mut keys = self.0.lock().unwrap();
+            if let Some(key) = keys.get(name) {
+                return Ok((key.clone(), false));
+            }
+            // Fixed public P-256 generator; no hardware/private operations in this test.
+            let hex = "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5";
+            let point = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect::<Vec<_>>();
+            let key = Identity::new(name, mode, &point)?;
+            keys.insert(name.into(), key.clone());
+            Ok((key, true))
+        }
+
+        fn identity(&self, name: &str, _: Mode) -> Result<Option<Identity>> {
+            Ok(self.0.lock().unwrap().get(name).cloned())
+        }
+
+        fn sign(&self, _: &Identity, _: &[u8], _: &Caller, _: &Payload) -> Result<Vec<u8>> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn reprovision_persists_effective_emails_without_recreating_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
+        fs::create_dir_all(&paths.state).unwrap();
+        let source = paths.config.clone();
+        let store = Store::default();
+        let mut config = Config::parse(
+            "email='personal@example.com'\n[keys.personal]\nmode='notify'\n[keys.work]\nmode='prompt'\nemail='work@example.com'",
+        )
+        .unwrap();
+        let mut state = State::default();
+        let output = provision(&store, &config, &source, &paths, &mut state).unwrap();
+        assert!(output.iter().all(|entry| entry["created"] == true));
+        let fingerprints = state
+            .keys
+            .iter()
+            .map(|(name, record)| (name.clone(), record.fingerprint.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        // Exercise override changes, its removal, the name fallback, and an
+        // override without a default. Reload persisted state on every operation.
+        for (default, override_email, personal, work) in [
+            (
+                Some("personal@example.com"),
+                Some("work@example.com"),
+                "personal@example.com",
+                "work@example.com",
+            ),
+            (
+                Some("personal@example.com"),
+                Some("new@example.com"),
+                "personal@example.com",
+                "new@example.com",
+            ),
+            (
+                Some("personal@example.com"),
+                None,
+                "personal@example.com",
+                "personal@example.com",
+            ),
+            (None, None, "personal", "work"),
+            (
+                None,
+                Some("only@example.com"),
+                "personal",
+                "only@example.com",
+            ),
+        ] {
+            config.email = default.map(str::to_owned);
+            config.keys.get_mut("work").unwrap().email = override_email.map(str::to_owned);
+            state = State::load(&paths).unwrap();
+            let output = provision(&store, &config, &source, &paths, &mut state).unwrap();
+            assert!(output.iter().all(|entry| entry["created"] == false));
+            state = State::load(&paths).unwrap();
+            for (name, comment) in [("personal", personal), ("work", work)] {
+                assert_eq!(
+                    state.keys[name].email.as_deref(),
+                    config.effective_email(name)
+                );
+                assert_eq!(state.keys[name].fingerprint, fingerprints[name]);
+                let identity = state.identity(&store, name).unwrap().unwrap();
+                assert!(identity.public_key.ends_with(&format!(" {comment}")));
+                assert_eq!(
+                    state.keys[name].public_key.as_deref(),
+                    Some(identity.public_key.as_str())
+                );
+                assert_eq!(
+                    fs::read_to_string(paths.public_key(name)).unwrap(),
+                    format!("{}\n", identity.public_key)
+                );
+                assert!(state.info(&store, &paths, name).unwrap().unwrap().synced);
+            }
+
+            // list/get and sync consume stored comments even when the current
+            // configuration has changed, until provision explicitly updates it.
+            let changed =
+                Config::parse("email='ignored@example.com'\n[keys.work]\nmode='prompt'").unwrap();
+            state.overlay(&changed, &source);
+            let identity = state.identity(&store, "work").unwrap().unwrap();
+            assert!(identity.public_key.ends_with(&format!(" {work}")));
+            fs::remove_file(paths.public_key("work")).unwrap();
+            sync_public_key(&identity, &paths).unwrap();
+            let info = state.info(&store, &paths, "work").unwrap().unwrap();
+            assert!(info.synced);
+            assert_eq!(info.public_key, Some(identity.public_key));
+        }
+
+        // No source config: provisioning must keep the registry's own emails.
+        state = State::load(&paths).unwrap();
+        provision(&store, &Config::default(), &source, &paths, &mut state).unwrap();
+        assert_eq!(
+            state.keys["work"].email.as_deref(),
+            Some("only@example.com")
+        );
+        assert_eq!(state.keys["personal"].email, None);
+        assert_eq!(store.0.lock().unwrap().len(), 2);
+    }
+}
+
 #[derive(Default)]
 pub struct Cached {
     state: std::sync::Mutex<Option<(Option<Stamp>, State)>>,
@@ -149,6 +284,61 @@ fn reported_info(
     Ok(info)
 }
 
+fn provision(
+    store: &impl KeyStore,
+    config: &Config,
+    source: &Path,
+    paths: &Paths,
+    state: &mut State,
+) -> Result<Vec<serde_json::Value>> {
+    let source = absolute_source(source)?;
+    for (name, key) in &config.keys {
+        if let Some(old) = state.keys.get(name) {
+            ensure!(
+                old.mode == key.mode,
+                "key {name} mode changed; remove it before reprovisioning"
+            );
+        }
+    }
+    let mut targets = state.clone();
+    targets.overlay(config, &source);
+    log_view(&targets, config, &source)?;
+    let mut output = Vec::new();
+    for (name, record) in &targets.keys {
+        let (identity, created) = store.provision(name, record.mode)?;
+        let email = if config.keys.contains_key(name) {
+            config.effective_email(name).map(str::to_owned)
+        } else {
+            record.email.clone()
+        };
+        let identity = identity.with_email(email.as_deref());
+        state.keys.insert(
+            name.clone(),
+            Record {
+                config: if config.keys.contains_key(name) {
+                    source.clone()
+                } else {
+                    record.config.clone()
+                },
+                email,
+                github: config
+                    .keys
+                    .get(name)
+                    .map_or(record.github, |key| key.github),
+                public_key: Some(identity.public_key.clone()),
+                fingerprint: Some(identity.fingerprint.clone()),
+                ..record.clone()
+            },
+        );
+        // Persist each completed private-key operation, so retries can recover.
+        state.save(paths)?;
+        let updated = sync_public_key(&identity, paths)?;
+        let info = state.info(store, paths, name)?;
+        output.push(json!({"key": info, "created": created, "updated": updated}));
+    }
+    Ok(output)
+}
+
 pub fn run(
     command: Commands,
     config: &Config,
@@ -191,53 +381,7 @@ pub fn run(
     let mut state = State::load(paths)?;
     match command {
         Commands::Provision(_) => {
-            let source = absolute_source(source)?;
-            for (name, key) in &config.keys {
-                if let Some(old) = state.keys.get(name) {
-                    ensure!(
-                        old.mode == key.mode,
-                        "key {name} mode changed; remove it before reprovisioning"
-                    );
-                }
-            }
-            let mut targets = state.clone();
-            targets.overlay(config, &source);
-            log_view(&targets, config, &source)?;
-            let mut output = Vec::new();
-            for (name, record) in &targets.keys {
-                let (identity, created) = store.provision(name, record.mode)?;
-                let email = if config.keys.contains_key(name) {
-                    config.user.email.clone()
-                } else {
-                    record.email.clone()
-                };
-                let identity = identity.with_user(&seccy_core::UserConfig {
-                    email: email.clone(),
-                });
-                state.keys.insert(
-                    name.clone(),
-                    Record {
-                        config: if config.keys.contains_key(name) {
-                            source.clone()
-                        } else {
-                            record.config.clone()
-                        },
-                        email,
-                        github: config
-                            .keys
-                            .get(name)
-                            .map_or(record.github, |key| key.github),
-                        public_key: Some(identity.public_key.clone()),
-                        fingerprint: Some(identity.fingerprint.clone()),
-                        ..record.clone()
-                    },
-                );
-                // Persist each completed private-key operation, so retries can recover.
-                state.save(paths)?;
-                let updated = sync_public_key(&identity, paths)?;
-                let info = state.info(&store, paths, name)?;
-                output.push(json!({"key": info, "created": created, "updated": updated}));
-            }
+            let output = provision(&store, config, source, paths, &mut state)?;
             emit(
                 output_mode,
                 json!({"ok": true, "keys": output}),

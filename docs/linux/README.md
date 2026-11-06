@@ -136,7 +136,6 @@ device. A wrong authenticator never results in automatic replacement enrollment.
 ## Keys, agent, Git, and fnox
 
 ```toml
-[user]
 email = "you@example.com"
 
 [keys.personal]
@@ -146,6 +145,7 @@ github = "auth"
 [keys.signing]
 mode = "prompt"
 github = "signing"
+email = "work@example.com" # Optional override of the top-level email.
 
 [keys.secrets]
 mode = "prompt"

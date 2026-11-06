@@ -75,7 +75,10 @@ fn xdg_paths_and_fallbacks() {
 fn inventory_and_sync_update_comments_without_changing_key() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
-    let mut config = Config::parse("[user]\nemail='old@example.com'\n[keys.work]\nmode='notify'\n[keys.missing]\nmode='prompt'").unwrap();
+    let mut config = Config::parse(
+        "email='old@example.com'\n[keys.work]\nmode='notify'\n[keys.missing]\nmode='prompt'",
+    )
+    .unwrap();
     let missing = key_info(&Store, &config, &paths, "missing")
         .unwrap()
         .unwrap();
@@ -91,7 +94,7 @@ fn inventory_and_sync_update_comments_without_changing_key() {
         .identity("work", Mode::Notify)
         .unwrap()
         .unwrap()
-        .with_user(&config.user);
+        .with_email(config.effective_email("work"));
     assert!(sync_public_key(&key, &paths).unwrap());
     let modified = std::fs::metadata(paths.public_key("work"))
         .unwrap()
@@ -112,14 +115,14 @@ fn inventory_and_sync_update_comments_without_changing_key() {
             .synced
     );
 
-    config.user.email = Some("koss@nocorp.me".into());
+    config.email = Some("koss@nocorp.me".into());
     assert!(
         !key_info(&Store, &config, &paths, "work")
             .unwrap()
             .unwrap()
             .synced
     );
-    let updated = key.clone().with_user(&config.user);
+    let updated = key.clone().with_email(config.effective_email("work"));
     assert_eq!(key.blob, updated.blob);
     assert_eq!(key.fingerprint, updated.fingerprint);
     assert!(sync_public_key(&updated, &paths).unwrap());
@@ -134,6 +137,26 @@ fn inventory_and_sync_update_comments_without_changing_key() {
             .unwrap()
             .synced
     );
+
+    for (default, override_email, expected) in [
+        (
+            Some("default@example.com"),
+            Some("work@example.com"),
+            "work@example.com",
+        ),
+        (None, Some("work@example.com"), "work@example.com"),
+        (Some("default@example.com"), None, "default@example.com"),
+        (None, None, "work"),
+    ] {
+        config.email = default.map(str::to_owned);
+        config.keys.get_mut("work").unwrap().email = override_email.map(str::to_owned);
+        let identity = key.clone().with_email(config.effective_email("work"));
+        sync_public_key(&identity, &paths).unwrap();
+        let info = key_info(&Store, &config, &paths, "work").unwrap().unwrap();
+        assert!(info.synced);
+        assert_eq!(info.fingerprint.as_deref(), Some(key.fingerprint.as_str()));
+        assert!(info.public_key.unwrap().ends_with(&format!(" {expected}")));
+    }
 }
 
 #[test]
@@ -141,14 +164,15 @@ fn config_missing_and_empty_are_valid_but_bad_config_is_not() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("config.toml");
     assert!(Config::load(&file).unwrap().keys.is_empty());
-    for content in ["", "[keys]", "[user]\nemail='koss@nocorp.me'"] {
+    for content in ["", "[keys]", "email='koss@nocorp.me'"] {
         std::fs::write(&file, content).unwrap();
         assert!(Config::load(&file).unwrap().keys.is_empty());
     }
     for content in [
         "bad toml",
-        "[user]\nemail='bad comment'",
-        "[user]\nemail=''",
+        "email='bad comment'",
+        "email=''",
+        "[user]\nemail='valid@example.com'",
     ] {
         std::fs::write(&file, content).unwrap();
         let error = format!("{:#}", Config::load(&file).unwrap_err());

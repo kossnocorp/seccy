@@ -1,7 +1,6 @@
 # Copy to ~/.config/seccy/config.toml (or $XDG_CONFIG_HOME/seccy/config.toml).
 log_level = "info"
 
-[user]
 email = "koss@nocorp.me"
 
 [keys.ssh]
@@ -11,3 +10,5 @@ github = "auth"
 [keys.signing]
 mode = "notify"
 github = "signing"
+# Optional per-key override; otherwise inherits the top-level email.
+email = "work@example.com"

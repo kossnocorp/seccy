@@ -1,6 +1,6 @@
 //! Persistent inventory. Source configurations are provisioning inputs only.
 use crate::{
-    Config, Identity, KeyConfig, KeyStore, Mode, UserConfig,
+    Config, Identity, KeyConfig, KeyStore, Mode,
     storage::{KeyInfo, Paths},
 };
 use anyhow::{Context, Result, ensure};
@@ -47,14 +47,13 @@ impl State {
         for (name, record) in &state.keys {
             let config = Config {
                 log_level: None,
-                user: UserConfig {
-                    email: record.email.clone(),
-                },
+                email: None,
                 keys: [(
                     name.clone(),
                     KeyConfig {
                         mode: record.mode,
                         github: record.github,
+                        email: record.email.clone(),
                     },
                 )]
                 .into(),
@@ -88,7 +87,7 @@ impl State {
                 mode: key.mode,
                 github: key.github,
                 config: source.into(),
-                email: config.user.email.clone(),
+                email: config.effective_email(name).map(str::to_owned),
                 public_key: None,
                 fingerprint: None,
             });
@@ -99,11 +98,9 @@ impl State {
         let Some(record) = self.keys.get(name) else {
             return Ok(None);
         };
-        Ok(store.identity(name, record.mode)?.map(|i| {
-            i.with_user(&UserConfig {
-                email: record.email.clone(),
-            })
-        }))
+        Ok(store
+            .identity(name, record.mode)?
+            .map(|i| i.with_email(record.email.as_deref())))
     }
 
     pub fn info(

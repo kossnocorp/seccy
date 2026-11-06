@@ -33,6 +33,7 @@ impl Mode {
 pub struct KeyConfig {
     pub mode: Mode,
     pub github: Option<Github>,
+    pub email: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -44,16 +45,9 @@ pub enum Github {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct UserConfig {
-    pub email: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct Config {
     pub log_level: Option<String>,
-    #[serde(default)]
-    pub user: UserConfig,
+    pub email: Option<String>,
     #[serde(default)]
     pub keys: BTreeMap<String, KeyConfig>,
 }
@@ -61,14 +55,9 @@ pub struct Config {
 impl Config {
     pub fn parse(text: &str) -> Result<Self> {
         let config: Self = toml::from_str(text).context("invalid configuration TOML")?;
-        if let Some(email) = &config.user.email {
-            ensure!(
-                !email.is_empty() && !email.chars().any(|c| c.is_whitespace() || c.is_control()),
-                "user.email must be nonempty and contain no whitespace or control characters"
-            );
-        }
+        validate_email(config.email.as_deref(), "email")?;
         ensure!(config.keys.len() <= 128, "at most 128 keys are supported");
-        for name in config.keys.keys() {
+        for (name, key) in &config.keys {
             ensure!(
                 !name.is_empty()
                     && name.len() <= 64
@@ -77,6 +66,7 @@ impl Config {
                         .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c)),
                 "key name must contain 1–64 ASCII letters, digits, underscores or hyphens: {name}"
             );
+            validate_email(key.email.as_deref(), &format!("keys.{name}.email"))?;
         }
         Ok(config)
     }
@@ -88,6 +78,24 @@ impl Config {
             Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
         }
     }
+
+    /// Per-key override, then the default. No email means use the key name.
+    pub fn effective_email(&self, name: &str) -> Option<&str> {
+        self.keys
+            .get(name)
+            .and_then(|key| key.email.as_deref())
+            .or(self.email.as_deref())
+    }
+}
+
+fn validate_email(email: Option<&str>, field: &str) -> Result<()> {
+    if let Some(email) = email {
+        ensure!(
+            !email.is_empty() && !email.chars().any(|c| c.is_whitespace() || c.is_control()),
+            "{field} must be nonempty and contain no whitespace or control characters"
+        );
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -118,8 +126,8 @@ impl Identity {
         )
     }
 
-    pub fn with_user(mut self, user: &UserConfig) -> Self {
-        let comment = user.email.as_deref().unwrap_or(&self.name);
+    pub fn with_email(mut self, email: Option<&str>) -> Self {
+        let comment = email.unwrap_or(&self.name);
         self.public_key = format!(
             "ecdsa-sha2-nistp256 {} {comment}",
             STANDARD.encode(&self.blob)

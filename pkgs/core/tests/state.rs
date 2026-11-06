@@ -5,9 +5,8 @@ fn registry_roundtrips_sources_and_does_not_overwrite_registered_keys() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
     std::fs::create_dir_all(&paths.state).unwrap();
-    let first =
-        Config::parse("[user]\nemail='first@example.com'\n[keys.one]\nmode='notify'").unwrap();
-    let second = Config::parse("[keys.one]\nmode='prompt'\n[keys.two]\nmode='prompt'").unwrap();
+    let first = Config::parse("email='first@example.com'\n[keys.one]\nmode='notify'").unwrap();
+    let second = Config::parse("[keys.one]\nmode='prompt'\nemail='ignored@example.com'\n[keys.two]\nmode='prompt'\nemail='work@example.com'\n[keys.three]\nmode='notify'").unwrap();
     let mut state = State::default();
     state.overlay(&first, &dir.path().join("first.toml"));
     state.save(&paths).unwrap();
@@ -21,7 +20,13 @@ fn registry_roundtrips_sources_and_does_not_overwrite_registered_keys() {
     );
     assert_eq!(state.keys["two"].config, dir.path().join("second.toml"));
     state.save(&paths).unwrap();
-    assert_eq!(State::load(&paths).unwrap().keys.len(), 2);
+    let loaded = State::load(&paths).unwrap();
+    assert_eq!(loaded.keys.len(), 3);
+    assert_eq!(
+        loaded.keys["two"].email.as_deref(),
+        Some("work@example.com")
+    );
+    assert_eq!(loaded.keys["three"].email, None);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -44,6 +49,8 @@ fn registry_rejects_unsafe_names_relative_sources_and_corruption() {
     for text in [
         "[keys.'../escape']\nmode='notify'\nconfig='/config.toml'",
         "[keys.test]\nmode='notify'\nconfig='relative.toml'",
+        "[keys.test]\nmode='notify'\nconfig='/config.toml'\nemail=''",
+        "[keys.test]\nmode='notify'\nconfig='/config.toml'\nemail='bad comment'",
         "invalid = [",
     ] {
         std::fs::write(paths.state.join("state.toml"), text).unwrap();
