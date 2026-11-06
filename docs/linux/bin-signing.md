@@ -10,9 +10,39 @@ particular key and has not changed. It does not establish that the program is
 safe, identify its publisher without an independently trusted key, or prevent
 another executable from using your TPM/FIDO devices.
 
-## Signing a release
+## GitHub release archives: artifact attestations
 
-Seccy's Linux release workflow uses OpenSSH signatures with the dedicated
+Official `cli@X.Y.Z` releases use **GitHub Actions artifact attestations** for
+both Linux architectures and macOS. The release workflow signs provenance using
+GitHub's OIDC identity via `actions/attest`, then verifies each final asset against
+the repository, release workflow, tag, and source commit before publishing it.
+Missing archives or failed verification block publication. No manually managed
+Linux signing key or additional GitHub secret is needed.
+
+Download and verify an archive before extracting or running it:
+
+```sh
+gh release download cli@0.1.0 --repo kossnocorp/seccy \
+  --pattern 'seccy-cli@0.1.0-linux-x86_64.tar.gz'
+gh attestation verify ./seccy-cli@0.1.0-linux-x86_64.tar.gz \
+  --repo kossnocorp/seccy \
+  --signer-workflow kossnocorp/seccy/.github/workflows/release-cli.yml \
+  --source-ref refs/tags/cli@0.1.0 \
+  --deny-self-hosted-runners
+bash scripts/install.sh --archive ./seccy-cli@0.1.0-linux-x86_64.tar.gz
+```
+
+Use `aarch64` for ARM64. The final command assumes a source checkout; alternatively
+use the installer linked in the [release guide](../releasing.md). Add
+`--source-digest EXPECTED_COMMIT_SHA` to verification when pinning a reviewed commit.
+Attestation bundles are also attached to releases and can be passed with
+`--bundle PATH`. The default downloader checks SHA-256 checksums; use the commands
+above for independent provenance verification. Attestation authenticates origin
+and bytes; it is not a malware scan or Linux runtime enforcement.
+
+## Optional manual OpenSSH signing
+
+For independently distributed builds, Seccy's manual signing task uses OpenSSH signatures with the dedicated
 `seccy-release` namespace. OpenSSH 8.0 or newer is required for SSH signatures.
 The signing key must be independent of the Seccy installation being verified.
 
@@ -43,7 +73,7 @@ The signing key must be independent of the Seccy installation being verified.
    ssh-keygen -lf ~/.ssh/seccy-release.pub
    ```
 
-## Verifying before installation
+## Verifying a manually signed archive
 
 Obtain the publisher's public key through a trusted channel. Downloading an
 archive, signature, and previously unknown public key from the same untrusted
@@ -78,7 +108,8 @@ release version as well: a valid signature alone does not prevent rollback.
 
 ## What makes an installation trustworthy?
 
-- **Release provenance:** pin the publisher's signing key and verify every
+- **Release provenance:** verify GitHub release attestations against the expected
+  workflow/tag, or pin the publisher's key for manually signed archives. Verify every
   downloaded release. For a self-built release, you are the publisher; a signature
   records your approval of those bytes, not an independent audit of the source.
 - **Build provenance:** review the source revision and dependency changes, use

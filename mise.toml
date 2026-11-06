@@ -16,8 +16,16 @@ idiomatic_version_file_enable_tools = ["rust"] # Use rust-toolchain.toml
 
 # Stack ########################################################################
 
-node = "latest"
+node = "24"
 pnpm = "latest"
+"cargo:cargo-nextest" = "latest"
+sccache = "latest"
+gh = "latest"
+jaq = "latest"
+fnox = "1.47.0"
+age = "latest"
+git-cliff = "latest"
+lua = "5.4"
 
 
 # Tasks ########################################################################
@@ -54,6 +62,9 @@ run = "bash pkgs/macos/scripts/package.sh"
 [tasks."package:check"]
 description = "Check the Bash packaging and notarization scripts"
 run = [
+  "bash -n scripts/install.sh",
+  "bash -n scripts/build.sh",
+  "bash -n scripts/macos-ci.sh",
   "bash -n pkgs/macos/scripts/package.sh",
   "bash -n pkgs/macos/scripts/notarize.sh",
   "bash -n pkgs/macos/scripts/notarize-setup.sh",
@@ -95,3 +106,18 @@ run = "bash pkgs/macos/scripts/notarize-setup.sh"
 description = "Build, sign, notarize and create target/Seccy-notarized.zip"
 depends = ["package"]
 run = "bash pkgs/macos/scripts/notarize.sh"
+
+[tasks.install]
+run = "pnpm install --frozen-lockfile"
+
+[tasks."build:archive"]
+description = "Build a distributable archive; macOS signs and notarizes"
+run = "bash scripts/build.sh"
+
+[tasks."setup:archive"]
+description = "Install a release archive and configure seccy (pass --archive PATH)"
+run = "bash scripts/install.sh"
+
+[tasks.changelog]
+run = "git-cliff --config cliff.toml --offline --latest --strip all"
+quiet = true

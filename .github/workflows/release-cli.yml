@@ -1,0 +1,80 @@
+name: Release CLI
+on:
+  push:
+    tags: ['cli@[0-9]+.[0-9]+.[0-9]+']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  qa:
+    uses: ./.github/workflows/qa.yml
+  build:
+    needs: qa
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+  release:
+    needs: build
+    runs-on: ubuntu-26.04
+    environment: release-cli
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: seccy-*
+          path: release-assets
+          merge-multiple: true
+      - name: Checksums and installer
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          for platform in linux macos; do
+            extension=tar.gz
+            if [[ "$platform" == macos ]]; then extension=zip; fi
+            for arch in x86_64 aarch64; do
+              test -s "release-assets/seccy-$TAG-$platform-$arch.$extension"
+            done
+          done
+          cp scripts/install.sh release-assets/install.sh
+          cd release-assets
+          sha256sum seccy-*.tar.gz seccy-*.zip install.sh > SHA256SUMS
+      - name: Attest release assets
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: release-assets/*
+      - name: Verify every asset's GitHub Actions provenance before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          for asset in release-assets/*; do
+            gh attestation verify "$asset" \
+              --bundle "$ATTESTATION_BUNDLE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-cli.yml" \
+              --source-ref "$GITHUB_REF" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners
+          done
+      - name: Generate changelog and publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          mise run changelog > release-notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to overwrite published assets" >&2
+            exit 1
+          fi
+          gh release create "$TAG" --draft --verify-tag --notes-file release-notes.md
+          gh release upload "$TAG" release-assets/* "${{ steps.attest.outputs.bundle-path }}"
+          gh release edit "$TAG" --draft=false --latest

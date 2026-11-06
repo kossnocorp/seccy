@@ -1,5 +1,18 @@
 # seccy
 
+## Install
+
+```sh
+curl -fsSL https://seccy.fiy/install.sh | bash
+```
+
+Requires a supported desktop session and hardware; see platform requirements below.
+The installer sets up the complete app/binaries, fnox provider, keys and login
+agent, including the Linux TPM system service. Use `--install-only` for files only,
+or `--archive PATH` for a locally verified release archive.
+
+Maintainers: [step-by-step release, Apple signing, fnox, and website setup](docs/releasing.md).
+
 Linux/GNOME TPM + FIDO2 support: see [Linux setup](docs/linux/README.md) and
 [Linux binary signing](docs/linux/bin-signing.md). macOS setup is below.
 

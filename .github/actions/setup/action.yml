@@ -1,0 +1,80 @@
+name: Set Up Dev Env
+description: Install tools and restore development caches.
+
+inputs:
+  enable-node:
+    required: false
+    default: "false"
+    description: Whether to install workspace Node.js dependencies.
+
+runs:
+  using: composite
+  steps:
+    - name: Set Rust Env Vars
+      shell: bash
+      run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+
+    - name: Restore Cargo Cache
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Restore mise Cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.local/share/mise
+        key: mise-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.lock', 'mise.toml', 'rust-toolchain.toml') }}
+        restore-keys: mise-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install mise
+      uses: jdx/mise-action@v4
+      with:
+        cache: false
+        install: false
+
+    - name: Install Tools
+      shell: bash
+      run: |
+        mise trust --yes
+        mise install
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Configure sccache
+      uses: actions/github-script@v9
+      with:
+        script: |
+          core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Set Rust sccache Env Vars
+      shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=on" >> "$GITHUB_ENV"
+        echo "ACTIONS_CACHE_SERVICE_V2=on" >> "$GITHUB_ENV"
+        echo "SCCACHE_PATH=$(mise which sccache)" >> "$GITHUB_ENV"
+        echo "RUSTC_WRAPPER=$(mise which sccache)" >> "$GITHUB_ENV"
+
+    - name: Get pnpm Store Path
+      if: inputs.enable-node == 'true'
+      id: pnpm-store
+      shell: bash
+      run: echo "STORE_PATH=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore pnpm Cache
+      if: inputs.enable-node == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.pnpm-store.outputs.STORE_PATH }}
+        key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: pnpm-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install Workspace Dependencies
+      if: inputs.enable-node == 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile

@@ -50,6 +50,7 @@ if [[ $authorized != true ]]; then
 fi
 
 bundle="$root/target/Seccy.app"
+rm -rf "$bundle"
 contents="$bundle/Contents"
 binaries="$contents/MacOS"
 plugin="$contents/Resources/fnox"
@@ -77,8 +78,9 @@ plutil -insert CFBundleName -string Seccy "$info"
 plutil -insert CFBundleExecutable -string seccy "$info"
 plutil -insert CFBundleIconFile -string Seccy.icns "$info"
 plutil -insert CFBundlePackageType -string APPL "$info"
-plutil -insert CFBundleVersion -string 1 "$info"
-plutil -insert CFBundleShortVersionString -string 0.1.0 "$info"
+version=$(cd "$root" && cargo metadata --no-deps --format-version 1 --locked | jaq -r '.packages[] | select(.name == "seccy_cli") | .version')
+plutil -insert CFBundleVersion -string "$version" "$info"
+plutil -insert CFBundleShortVersionString -string "$version" "$info"
 plutil -insert LSMinimumSystemVersion -string 11.0 "$info"
 plutil -insert LSBackgroundOnly -bool YES "$info"
 

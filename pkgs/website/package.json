@@ -1,0 +1,20 @@
+{
+  "name": "seccy.fiy",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "dependencies": {
+    "astro": "7.3.2"
+  },
+  "devDependencies": {
+    "@astrojs/cloudflare": "14.3.1",
+    "@tailwindcss/typography": "^0.5.20",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "^26.5.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.131.1"
+  }
+}

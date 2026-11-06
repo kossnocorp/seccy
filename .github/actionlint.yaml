@@ -1,0 +1,7 @@
+# GitHub-hosted labels confirmed in actions/runner-images, not yet included in
+# actionlint's built-in list. This setting only extends lint-time label checking.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
+    - xcode-27

@@ -6,3 +6,10 @@ node_modules/
 
 # mise
 mise.local.toml
+fnox.local.toml
+.secrets/
+pkgs/website/.astro/
+pkgs/website/.wrangler/
+pkgs/website/dist/
+pkgs/website/worker-configuration.d.ts
+pkgs/website/public/install.sh

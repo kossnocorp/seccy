@@ -1,0 +1,72 @@
+name: Build
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-26.04
+            arch: x86_64
+          - os: ubuntu-26.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: sudo apt-get update && sudo apt-get install -y libfido2-dev libtss2-dev libsecret-1-dev libgcr-4-dev pkg-config
+      - uses: ./.github/actions/setup
+      - run: mise run build:archive
+      - uses: actions/upload-artifact@v7
+        with:
+          name: seccy-linux-${{ matrix.arch }}
+          path: target/release-assets/*
+          if-no-files-found: error
+      - uses: ./.github/actions/cache-save
+  macos:
+    environment: release-cli
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: xcode-27
+            arch: aarch64
+          # Xcode 27 runners are ARM64-only; use the latest Intel image.
+          - os: macos-26-intel
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    env:
+      SECCY_SIGNING_IDENTITY: ${{ vars.SECCY_SIGNING_IDENTITY }}
+      SECCY_BUNDLE_ID: ${{ vars.SECCY_BUNDLE_ID || 'fyi.seccy.cli' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+      - name: Import signing certificate, profile, and notarization credentials
+        run: bash scripts/macos-ci.sh
+        env:
+          SECCY_CERTIFICATE_BASE64: ${{ secrets.SECCY_CERTIFICATE_BASE64 }}
+          SECCY_CERTIFICATE_PASSWORD: ${{ secrets.SECCY_CERTIFICATE_PASSWORD }}
+          SECCY_PROFILE_BASE64: ${{ secrets.SECCY_PROFILE_BASE64 }}
+          SECCY_APPLE_ID: ${{ secrets.SECCY_APPLE_ID }}
+          SECCY_TEAM_ID: ${{ vars.SECCY_TEAM_ID }}
+          SECCY_APPLE_PASSWORD: ${{ secrets.SECCY_APPLE_PASSWORD }}
+      - name: Build, sign, notarize, staple, and verify Gatekeeper
+        run: mise run build:archive
+      - uses: actions/upload-artifact@v7
+        with:
+          name: seccy-macos-${{ matrix.arch }}
+          path: target/release-assets/*
+          if-no-files-found: error
+      - name: Upload notarization diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: notarization-${{ matrix.arch }}
+          path: target/notarization-*.json
+          if-no-files-found: ignore
+      - name: Remove signing credentials
+        if: always()
+        run: bash scripts/macos-ci.sh cleanup
+      - uses: ./.github/actions/cache-save

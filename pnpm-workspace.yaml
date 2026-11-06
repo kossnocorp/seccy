@@ -1,0 +1,6 @@
+packages:
+  - pkgs/website
+
+allowBuilds:
+  esbuild: true
+  workerd: true
