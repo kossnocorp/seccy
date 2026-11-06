@@ -136,6 +136,68 @@ cp "$source" "$output"
         result = self.run_install("--version", "cli@0.1.0")
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def macos_fixture(self):
+        # These stubs exercise installer layout/rollback, not Apple's validation.
+        self.command("uname", 'if [ "$1" = -s ]; then echo Darwin; else echo arm64; fi')
+        app = self.root / "fixture/Seccy.app"
+        (app / "Contents/MacOS").mkdir(parents=True)
+        (app / "Contents/Resources/fnox").mkdir(parents=True)
+        executable = app / "Contents/MacOS/seccy"
+        executable.write_text((self.source / "bin/seccy").read_text())
+        executable.chmod(0o755)
+        (app / "Contents/embedded.provisionprofile").write_text("profile")
+        (app / "Contents/Resources/fnox/provider.lua").write_text("provider")
+        self.env["FIXTURE_APP"] = str(app)
+        self.command("ditto", '''
+if [ "$1" = -x ]; then
+    cp -R "$FIXTURE_APP" "$4/Seccy.app"
+elif [ "${FAIL_COPY:-}" = 1 ]; then
+    mkdir -p "$2"
+    exit 1
+else
+    cp -R "$1" "$2"
+fi
+''')
+        self.command("codesign", 'test "${FAIL_VERIFY:-}" != 1')
+        self.command("xcrun", "exit 0")
+        self.command("spctl", "exit 0")
+        return app
+
+    def test_macos_xdg_layout_and_complete_bundle_updates(self):
+        app = self.macos_fixture()
+        for value in (None, "", "relative", str(self.root / "custom data")):
+            with self.subTest(xdg_data_home=value):
+                if value is None:
+                    self.env.pop("XDG_DATA_HOME", None)
+                else:
+                    self.env["XDG_DATA_HOME"] = value
+                data = Path(value) if value and value.startswith("/") else self.home / ".local/share"
+                destination = data / "seccy/Seccy.app"
+                for revision in ("first", "updated"):
+                    (app / "Contents/embedded.provisionprofile").write_text(revision)
+                    result = self.run_install("--archive", str(self.archive))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual((destination / "Contents/embedded.provisionprofile").read_text(), revision)
+                    self.assertEqual((destination / "Contents/Resources/fnox/provider.lua").read_text(), "provider")
+                    self.assertEqual((self.home / ".local/bin/seccy").resolve(), destination / "Contents/MacOS/seccy")
+                self.assertFalse((self.home / "Applications").exists())
+
+    def test_macos_failed_verification_or_copy_preserves_installed_bundle(self):
+        self.macos_fixture()
+        result = self.run_install("--archive", str(self.archive))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        destination = self.home / ".local/share/seccy/Seccy.app"
+        marker = destination / "previous-installation"
+        marker.write_text("preserve")
+        for failure in ("FAIL_VERIFY", "FAIL_COPY"):
+            with self.subTest(failure=failure):
+                self.env[failure] = "1"
+                result = self.run_install("--archive", str(self.archive))
+                self.env.pop(failure)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(marker.read_text(), "preserve")
+                self.assertTrue((self.home / ".local/bin/seccy").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

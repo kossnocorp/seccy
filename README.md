@@ -11,6 +11,23 @@ The installer sets up the complete app/binaries, fnox provider, keys and login
 agent, including the Linux TPM system service. Use `--install-only` for files only,
 or `--archive PATH` for a locally verified release archive.
 
+Both platforms install beneath `$XDG_DATA_HOME/seccy`, defaulting to
+`~/.local/share/seccy` when the variable is unset, empty, or relative:
+
+- macOS keeps the complete signed and stapled `Seccy.app` bundle in that directory.
+- Linux keeps its `bin/`, `fnox/`, and `system/` payload there.
+- Commands are symlinked into `~/.local/bin`, or an absolute `XDG_BIN_HOME`
+  (a project convention, not an XDG standard).
+
+Rerun the installer to update; normal setup refreshes the login service's
+executable path. With `--install-only`, run `seccy service install` afterward to
+refresh and restart an existing service. Configuration, keys, and state are kept
+separately from the installed bundle. The per-user installation is writable by
+your user: signature/notarization checks do not provide the file-replacement
+protection of an administrator-owned installation. macOS verification still uses
+`codesign`, `stapler`, and Gatekeeper; the installer does not re-sign the bundle
+or remove quarantine.
+
 Maintainers: [step-by-step release, Apple signing, fnox, and website setup](docs/releasing.md).
 
 Linux/GNOME TPM + FIDO2 support: see [Linux setup](docs/linux/README.md) and
@@ -566,10 +583,11 @@ Git's `core.sshCommand`.
 ### Start automatically at login
 
 Place the complete signed app at a permanent location (for example,
-`/Applications/Seccy.app`), provision your configs, then run:
+`~/.local/share/seccy/Seccy.app`, the installer's default), provision your configs,
+then run (adjust for an absolute `XDG_DATA_HOME` override):
 
 ```sh
-/Applications/Seccy.app/Contents/MacOS/seccy service install
+"$HOME/.local/share/seccy/Seccy.app/Contents/MacOS/seccy" service install
 seccy service status
 seccy service restart
 seccy service uninstall

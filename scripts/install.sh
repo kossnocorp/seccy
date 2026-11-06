@@ -58,6 +58,7 @@ bin=${XDG_BIN_HOME:-"$HOME/.local/bin"}
 [[ $bin = /* ]] || { echo 'XDG_BIN_HOME must be absolute' >&2; exit 1; }
 data=${XDG_DATA_HOME:-"$HOME/.local/share"}
 [[ $data = /* ]] || data="$HOME/.local/share"
+prefix="$data/seccy"
 mkdir -p "$bin" "$temporary/extracted"
 for name in seccy seccy-tpm; do
     if [[ -e "$bin/$name" && ! -L "$bin/$name" ]]; then
@@ -70,8 +71,8 @@ if [[ $os == Darwin ]]; then
     codesign --verify --strict "$app"
     xcrun stapler validate "$app"
     spctl --assess --type execute "$app"
-    mkdir -p "$HOME/Applications"
-    destination="$HOME/Applications/Seccy.app"
+    mkdir -p "$prefix"
+    destination="$prefix/Seccy.app"
     # Preserve the previous installation until the new bundle has been verified.
     if [[ -e $destination ]]; then mv "$destination" "$temporary/previous.app"; fi
     if ! ditto "$app" "$destination"; then
@@ -84,7 +85,6 @@ if [[ $os == Darwin ]]; then
 else
     tar -xzf "$archive" -C "$temporary/extracted"
     source="$temporary/extracted/seccy"
-    prefix="$data/seccy"
     for file in bin/seccy bin/seccy-tpm fnox/provider.lua system/seccy-tpm.conf system/seccy-tpm.service; do
         [[ -f $source/$file ]] || { echo "Incomplete archive: $file" >&2; exit 1; }
     done
