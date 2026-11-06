@@ -3,7 +3,7 @@
 ## Install
 
 ```sh
-curl -fsSL https://seccy.fiy/install.sh | bash
+curl -fsSL https://seccy.fyi/install.sh | bash
 ```
 
 Requires a supported desktop session and hardware; see platform requirements below.
@@ -38,12 +38,12 @@ mise run run -- list --json
 
 Workspace:
 
-| Crate | Responsibility |
-| --- | --- |
-| `pkgs/core` / `seccy_core` | Strict TOML config, key-store interface, SSH wire protocol and public-key encoding; portable to Linux |
-| `pkgs/macos` / `seccy_macos` | Security.framework Secure Enclave access, biometric ACLs, notifications, socket peer identification |
-| `pkgs/cli` / `seccy_cli` | `seccy` executable, usage command definitions, JSON output, Unix socket agent |
-| `pkgs/fnox` | fnox Lua encryption provider (not a Rust crate) |
+| Crate                        | Responsibility                                                                                        |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `pkgs/core` / `seccy_core`   | Strict TOML config, key-store interface, SSH wire protocol and public-key encoding; portable to Linux |
+| `pkgs/macos` / `seccy_macos` | Security.framework Secure Enclave access, biometric ACLs, notifications, socket peer identification   |
+| `pkgs/cli` / `seccy_cli`     | `seccy` executable, usage command definitions, JSON output, Unix socket agent                         |
+| `pkgs/fnox`                  | fnox Lua encryption provider (not a Rust crate)                                                       |
 
 ## macOS packaging
 
@@ -261,14 +261,14 @@ directory nor its parents are searched. Remove old `--config` arguments and fnox
 Reinstall the login service after changing `XDG_CONFIG_HOME` so it captures the
 resolved location.
 
-| Item | Path | Default |
-| --- | --- | --- |
-| User configuration | `$XDG_CONFIG_HOME/seccy/config.toml` | `~/.config/seccy/config.toml` |
-| Public keys | `$XDG_STATE_HOME/seccy/keys/<name>.pub` | `~/.local/state/seccy/keys/<name>.pub` |
-| Agent socket | `$XDG_RUNTIME_DIR/seccy/agent.sock` | When unset: `$XDG_STATE_HOME/seccy/agent.sock`, default `~/.local/state/seccy/agent.sock` |
-| Key registry | `$XDG_STATE_HOME/seccy/state.toml` | `~/.local/state/seccy/state.toml` |
-| Secrets socket | Alongside the agent socket, named `secrets.sock` | `~/.local/state/seccy/secrets.sock` when runtime/state overrides are unset |
-| Provision/sync lock | `$XDG_STATE_HOME/seccy/provision.lock` | `~/.local/state/seccy/provision.lock` |
+| Item                | Path                                             | Default                                                                                   |
+| ------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| User configuration  | `$XDG_CONFIG_HOME/seccy/config.toml`             | `~/.config/seccy/config.toml`                                                             |
+| Public keys         | `$XDG_STATE_HOME/seccy/keys/<name>.pub`          | `~/.local/state/seccy/keys/<name>.pub`                                                    |
+| Agent socket        | `$XDG_RUNTIME_DIR/seccy/agent.sock`              | When unset: `$XDG_STATE_HOME/seccy/agent.sock`, default `~/.local/state/seccy/agent.sock` |
+| Key registry        | `$XDG_STATE_HOME/seccy/state.toml`               | `~/.local/state/seccy/state.toml`                                                         |
+| Secrets socket      | Alongside the agent socket, named `secrets.sock` | `~/.local/state/seccy/secrets.sock` when runtime/state overrides are unset                |
+| Provision/sync lock | `$XDG_STATE_HOME/seccy/provision.lock`           | `~/.local/state/seccy/provision.lock`                                                     |
 
 Empty and relative XDG values are ignored, as required by the XDG specification. Socket and lock directories are owner-only. Existing `~/.seccy` sockets are no longer used. Public files can be regenerated with `sync`; private keys remain in the keychain.
 
@@ -814,7 +814,20 @@ and notification delivery must also be checked with the signed app on hardware.
 `--json` works before or after a subcommand. Successes have `"ok":true`; failures have `"ok":false` and `"error"`. Command results are a single JSON object on stdout. Exit status is 0 for success, 1 for operational errors, 2 for CLI parse errors. Help/version requests in JSON mode return a `text` field.
 
 ```json
-{"ok":true,"keys":[{"name":"personal","mode":"prompt","status":"not_provisioned","public_key_path":"/Users/you/.local/share/seccy/keys/personal.pub","public_key":null,"fingerprint":null,"synced":false}]}
+{
+  "ok": true,
+  "keys": [
+    {
+      "name": "personal",
+      "mode": "prompt",
+      "status": "not_provisioned",
+      "public_key_path": "/Users/you/.local/share/seccy/keys/personal.pub",
+      "public_key": null,
+      "fingerprint": null,
+      "synced": false
+    }
+  ]
+}
 ```
 
 Agent stdout is JSON Lines with `ready`, `signed`, and `request_error` events; SSH protocol bytes travel only over the socket. A `signed` event includes the local client's executable and PID. It means a signature was returned, not that a remote server accepted it.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Also published verbatim at https://seccy.fiy/install.sh.
+# Also published verbatim at https://seccy.fyi/install.sh.
 set -euo pipefail
 usage() {
     cat <<'EOF'

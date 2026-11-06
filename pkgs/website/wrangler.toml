@@ -4,7 +4,7 @@ name = "seccy-website"
 main = "@astrojs/cloudflare/entrypoints/server"
 
 [[routes]]
-pattern = "seccy.fiy"
+pattern = "seccy.fyi"
 custom_domain = true
 
 [assets]

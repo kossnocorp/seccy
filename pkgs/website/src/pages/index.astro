@@ -2,51 +2,115 @@
 import Layout from "#/ui/layouts/Layout.astro";
 ---
 
-<Layout title="Seccy — Hardware-backed keys, everyday tools" description="SSH, Git signing, and encrypted secrets. Secure Enclave on macOS. TPM and FIDO2 on Linux.">
+<Layout
+  title="Seccy — Hardware-backed keys, everyday tools"
+  description="SSH, Git signing, and encrypted secrets. Secure Enclave on macOS. TPM and FIDO2 on Linux."
+>
   <div class="page">
     <main>
       <section class="hero">
         <img src="/icon.png" width="96" height="96" alt="" />
         <h1>Seccy</h1>
         <h2>Your keys. Your hardware. Your say.</h2>
-        <p>SSH authentication, Git signing, and encrypted secrets with hardware-backed keys and authorization you can see.</p>
-        <nav><a class="link" href="#install">Install Seccy →</a><a class="link" href="https://github.com/kossnocorp/seccy">GitHub ↗</a></nav>
+        <p>
+          SSH authentication, Git signing, and encrypted secrets with
+          hardware-backed keys and authorization you can see.
+        </p>
+        <nav>
+          <a class="link" href="#install">Install Seccy →</a><a
+            class="link"
+            href="https://github.com/kossnocorp/seccy">GitHub ↗</a>
+        </nav>
       </section>
       <section class="details">
         <h2>One agent. The tools you already use.</h2>
         <dl>
           <dt>macOS: Secure Enclave + Touch ID</dt>
-          <dd>Non-exportable P-256 keys, with biometric approval for prompt keys. Distributed as a signed, notarized app bundle.</dd>
+          <dd>
+            Non-exportable P-256 keys, with biometric approval for prompt keys.
+            Distributed as a signed, notarized app bundle.
+          </dd>
           <dt>Linux: TPM + FIDO2</dt>
-          <dd>TPM-generated keys protected by your security key, with GNOME prompts and Secret Service integration.</dd>
+          <dd>
+            TPM-generated keys protected by your security key, with GNOME
+            prompts and Secret Service integration.
+          </dd>
           <dt>SSH, Git, and fnox</dt>
-          <dd>Use the standard SSH agent protocol, sign commits, sync public keys to GitHub, and encrypt secrets through the included fnox provider.</dd>
+          <dd>
+            Use the standard SSH agent protocol, sign commits, sync public keys
+            to GitHub, and encrypt secrets through the included fnox provider.
+          </dd>
           <dt>Know what is asking</dt>
-          <dd>Inspect local client details, key identities, and operation logs. Script everything with JSON and built-in jq queries.</dd>
+          <dd>
+            Inspect local client details, key identities, and operation logs.
+            Script everything with JSON and built-in jq queries.
+          </dd>
         </dl>
       </section>
       <section id="install" class="details">
         <h2>Get started</h2>
-        <p>Run in your logged-in desktop session. The installer downloads the matching release, verifies its checksum, installs the complete package, and walks through key and agent setup.</p>
-        <pre><code>curl -fsSL https://seccy.fiy/install.sh | bash</code></pre>
-        <p>macOS requires a Secure Enclave-equipped Mac. Linux requires GNOME, a TPM 2.0 device, and a compatible FIDO2 authenticator. Linux setup uses sudo to install the TPM system service.</p>
-        <p><a class="link" href="https://github.com/kossnocorp/seccy/releases">Release archives</a> · <a class="link" href="https://github.com/kossnocorp/seccy#readme">Documentation</a> · <a class="link" href="https://github.com/kossnocorp/seccy/blob/main/docs/linux/README.md">Linux requirements</a></p>
+        <p>
+          Run in your logged-in desktop session. The installer downloads the
+          matching release, verifies its checksum, installs the complete
+          package, and walks through key and agent setup.
+        </p>
+        <pre><code>curl -fsSL https://seccy.fyi/install.sh | bash</code></pre>
+        <p>
+          macOS requires a Secure Enclave-equipped Mac. Linux requires GNOME, a
+          TPM 2.0 device, and a compatible FIDO2 authenticator. Linux setup uses
+          sudo to install the TPM system service.
+        </p>
+        <p>
+          <a class="link" href="https://github.com/kossnocorp/seccy/releases"
+            >Release archives</a
+          > · <a class="link" href="https://github.com/kossnocorp/seccy#readme"
+            >Documentation</a
+          > · <a
+            class="link"
+            href="https://github.com/kossnocorp/seccy/blob/main/docs/linux/README.md"
+            >Linux requirements</a>
+        </p>
       </section>
     </main>
-    <footer>Sasha Koss © 2026 · <a class="link" href="https://github.com/kossnocorp/seccy">Open source</a></footer>
+    <footer>
+      Sasha Koss © 2026 · <a
+        class="link"
+        href="https://github.com/kossnocorp/seccy">Open source</a>
+    </footer>
   </div>
 </Layout>
 
 <style>
   @reference "#/ui/styles/global.css";
-  .page { @apply w-full max-w-5xl mx-auto px-6 py-12 sm:px-12 sm:py-20; }
-  main { @apply flex flex-col gap-16; }
-  section { @apply flex flex-col gap-5 max-w-2xl; }
-  h1 { @apply text-5xl sm:text-7xl font-bold text-(--color-heading-1); }
-  h2 { @apply text-xl sm:text-2xl font-semibold text-(--color-heading-2); }
-  p, dd { @apply text-lg text-(--color-text); }
-  nav { @apply flex gap-6; }
-  dt { @apply font-semibold mt-6 mb-2; }
-  pre { @apply overflow-x-auto p-5 rounded-lg border border-(--color-code-border) bg-(--color-code-canvas) text-(--color-code-ink) text-sm; }
-  footer { @apply mt-20 text-sm opacity-70; }
+  .page {
+    @apply w-full max-w-5xl mx-auto px-6 py-12 sm:px-12 sm:py-20;
+  }
+  main {
+    @apply flex flex-col gap-16;
+  }
+  section {
+    @apply flex flex-col gap-5 max-w-2xl;
+  }
+  h1 {
+    @apply text-5xl sm:text-7xl font-bold text-(--color-heading-1);
+  }
+  h2 {
+    @apply text-xl sm:text-2xl font-semibold text-(--color-heading-2);
+  }
+  p,
+  dd {
+    @apply text-lg text-(--color-text);
+  }
+  nav {
+    @apply flex gap-6;
+  }
+  dt {
+    @apply font-semibold mt-6 mb-2;
+  }
+  pre {
+    @apply overflow-x-auto p-5 rounded-lg border border-(--color-code-border) bg-(--color-code-canvas) text-(--color-code-ink) text-sm;
+  }
+  footer {
+    @apply mt-20 text-sm opacity-70;
+  }
 </style>
