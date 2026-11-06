@@ -48,7 +48,7 @@ mise run package
 export PATH="$PWD/target/Seccy.app/Contents/MacOS:$PATH"
 ```
 
-Run the executable **inside** the bundle; retain the bundle and embedded profile together when installing it elsewhere. Keep the same app identifier, keychain group and signing team across upgrades. Signing and provisioning credentials are not included in this repository. The package task builds and signs; it does not notarize or distribute the application. It generates the macOS app icon from `assets/icon.png` using the built-in `sips` and `iconutil` tools.
+Run the executable **inside** the bundle; retain the bundle and embedded profile together when installing it elsewhere. Keep the same app identifier, keychain group and signing team across upgrades. Signing and provisioning credentials are not included in this repository. The package task builds and signs; it does not notarize or distribute the application. It generates the macOS app icon from `assets/icon-macos.png` using the built-in `sips` and `iconutil` tools.
 
 ### Notarize for another Mac
 
@@ -398,8 +398,16 @@ notes. At most 64 key matches are retained. Files are reread for each request.
 macOS controls the Touch ID window's layout, typography, size, and biometric
 controls. `LAContext` lets us set the reason and cancel/fallback labels and control
 authentication reuse. It does not provide custom fields or extra action buttons.
-The application name/icon come from the app bundle. Long descriptions may be
-truncated by macOS; logs retain the complete decoded information.
+The packaged application supplies its name and icon through
+`Seccy.app/Contents/Info.plist`: `CFBundleIconFile` points to
+`Resources/Seccy.icns`, generated from `assets/icon-macos.png`. Run
+`Seccy.app/Contents/MacOS/seccy` and retain the whole bundle; the standalone
+`target/release/seccy` executable does not carry this app icon. Verify the Touch
+ID icon interactively after packaging, since macOS controls the authentication
+UI and application attribution. Key-use notifications currently use `osascript`,
+whose notification identity/icon is separate from the Seccy bundle. Long
+descriptions may be truncated by macOS; logs retain the complete decoded
+information.
 
 ## SSH / Git transport
 

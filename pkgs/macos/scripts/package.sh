@@ -62,9 +62,9 @@ cp "$profile_path" "$contents/embedded.provisionprofile"
 iconset="$temporary/Seccy.iconset"
 mkdir -p "$iconset"
 for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$root/assets/icon.png" \
+    sips -z "$size" "$size" "$root/assets/icon-macos.png" \
         --out "$iconset/icon_${size}x${size}.png" >/dev/null
-    sips -z "$((size * 2))" "$((size * 2))" "$root/assets/icon.png" \
+    sips -z "$((size * 2))" "$((size * 2))" "$root/assets/icon-macos.png" \
         --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$iconset" -o "$contents/Resources/Seccy.icns"
