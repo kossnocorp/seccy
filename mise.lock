@@ -54,6 +54,11 @@ version = "0.9.140"
 backend = "cargo:cargo-nextest"
 specifiers = ["latest"]
 
+[[tools."cargo:cargo-release"]]
+version = "1.1.6"
+backend = "cargo:cargo-release"
+specifiers = ["1.1.6"]
+
 [[tools.fnox]]
 version = "1.47.0"
 backend = "packslip:github.com/jdx/fnox"

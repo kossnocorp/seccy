@@ -27,6 +27,7 @@ jobs:
         run: mise run linux:sign:test
       - if: runner.os == 'Linux'
         run: python3 scripts/test-install.py
+      - run: mise exec -- python3 scripts/test-version.py
       - uses: ./.github/actions/cache-save
       - if: always()
         uses: ./.github/actions/stats

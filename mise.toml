@@ -10,6 +10,7 @@ config_roots = ["pkgs/*"]
 [settings]
 lockfile = true
 idiomatic_version_file_enable_tools = ["rust"] # Use rust-toolchain.toml
+cargo.binstall = true
 
 
 [tools]
@@ -19,6 +20,7 @@ idiomatic_version_file_enable_tools = ["rust"] # Use rust-toolchain.toml
 node = "24"
 pnpm = "latest"
 "cargo:cargo-nextest" = "latest"
+"cargo:cargo-release" = "1.1.6"
 sccache = "latest"
 gh = "latest"
 jaq = "latest"
@@ -121,3 +123,68 @@ run = "bash scripts/install.sh"
 [tasks.changelog]
 run = "git-cliff --config cliff.toml --offline --latest --strip all"
 quiet = true
+
+[tasks."version:cli"]
+description = "Bump the shared CLI crate version, commit, and tag locally"
+usage = '''
+arg "<version>" help="Release version (X.Y.Z)" validate="value matches '^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$'" validate_error="Expected a version in X.Y.Z format (no leading zeros)"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n $(git status --porcelain --untracked-files=all) ]]; then
+  echo 'Working tree is dirty; commit or stash changes before versioning.' >&2
+  exit 1
+fi
+tag="cli@$usage_version"
+if git show-ref --verify --quiet "refs/tags/$tag"; then
+  echo "Tag $tag already exists." >&2
+  exit 1
+fi
+cargo release version "$usage_version" --workspace --no-confirm --execute
+git add Cargo.toml Cargo.lock pkgs/*/Cargo.toml
+git commit -m "Bump $tag"
+git tag "$tag"
+'''
+
+[tasks."release:cli"]
+description = "Version the CLI, then push commits and tags"
+usage = '''
+arg "<version>" help="Release version (X.Y.Z)" validate="value matches '^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$'" validate_error="Expected a version in X.Y.Z format (no leading zeros)"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+mise run //:version:cli "$usage_version"
+git push
+git push --tags
+'''
+
+[tasks."release:version"]
+description = "Tag the next website version for today (YYYY-MM-DD.N) locally"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n $(git status --porcelain --untracked-files=all) ]]; then
+  echo 'Working tree is dirty; commit or stash changes before versioning.' >&2
+  exit 1
+fi
+day=$(date +%Y-%m-%d)
+revision=$(git tag --list "website@$day.*" | awk -F. '
+  $0 ~ /^website@[0-9]{4}-[0-9]{2}-[0-9]{2}[.][0-9]+$/ && $NF + 0 > max { max = $NF + 0 }
+  END { printf "%.0f", max + 1 }
+')
+tag="website@$day.$revision"
+git tag "$tag"
+echo "$tag"
+'''
+
+[tasks."release:website"]
+description = "Version the website, then push commits and tags"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+mise run //:release:version
+git push
+git push --tags
+'''

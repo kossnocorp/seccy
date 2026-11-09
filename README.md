@@ -71,6 +71,23 @@ Workspace:
 | `pkgs/cli` / `seccy_cli`     | `seccy` executable, usage command definitions, JSON output, Unix socket agent                         |
 | `pkgs/fnox`                  | fnox Lua encryption provider (not a Rust crate)                                                       |
 
+## Releases
+
+`mise install` installs the release tools, including cargo-release.
+
+- `mise //:version:cli 0.2.0` validates `X.Y.Z`, requires a clean working tree,
+  bumps the shared Rust workspace version and lockfile, commits `Bump cli@0.2.0`,
+  and creates the local tag `cli@0.2.0`.
+- `mise //:release:cli 0.2.0` runs that task, then `git push` and `git push --tags`.
+- `mise //:release:version` requires a clean working tree and tags the current
+  commit as `website@YYYY-MM-DD.N`. It uses the local date and the highest existing
+  local website tag revision for that day, starting at `.1`.
+- `mise //:release:website` runs the website version task, then `git push` and
+  `git push --tags`.
+
+Fetch remote tags before versioning if another machine has released since your
+last fetch. Pushing release tags starts the corresponding GitHub Actions workflow.
+
 ## macOS packaging
 
 Requires an Apple Silicon or Secure Enclave-equipped Intel Mac, a logged-in GUI user session, and enrolled Touch ID for `prompt` keys. Keys are non-exportable P-256 (`ecdsa-sha2-nistp256`); there is no software fallback or private-key import.
