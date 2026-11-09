@@ -5,6 +5,7 @@ use serde_json::json;
 use std::path::PathBuf;
 use usage_rs::{Args, Cli, Subcommands};
 
+mod activate;
 mod fnox;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod gh;
@@ -54,6 +55,8 @@ struct App {
 
 #[derive(Subcommands)]
 enum Commands {
+    /// Print shell setup for PATH and SSH_AUTH_SOCK
+    Activate(ActivateArgs),
     /// Initialize the Linux TPM/FIDO vault
     Init(InitArgs),
     /// Install or locate the fnox plugin
@@ -82,6 +85,12 @@ enum Commands {
     Service(ServiceArgs),
     /// Manage GitHub SSH keys using gh
     Gh(GhArgs),
+}
+
+#[derive(Args)]
+struct ActivateArgs {
+    /// Shell type: bash, elvish, fish, nu, xonsh, zsh, pwsh, powershell (defaults to SHELL)
+    shell_type: Option<String>,
 }
 
 #[derive(Args)]
@@ -294,6 +303,9 @@ fn main() {
 }
 
 fn run(app: App, output: &Output) -> Result<()> {
+    if let Commands::Activate(args) = &app.command {
+        return activate::run(args.shell_type.as_deref(), output);
+    }
     logging::init()?;
     if let Commands::Fnox(args) = &app.command {
         return match args.command {
@@ -328,6 +340,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         }
     }
     let command = match &app.command {
+        Commands::Activate(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),
         Commands::Provision(_) => "provision",
@@ -372,6 +385,7 @@ fn run_platform(app: App, config: Config, output: &Output) -> Result<()> {
     let store = platform::Store;
     let paths = Paths::from_env()?;
     match app.command {
+        Commands::Activate(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),
         command @ (Commands::Provision(_)

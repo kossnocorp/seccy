@@ -3,20 +3,18 @@
 set -euo pipefail
 usage() {
     cat <<'EOF'
-Usage: install.sh [--version cli@X.Y.Z] [--archive PATH] [--install-only]
-Installs a complete Seccy release, then configures keys, fnox, and the login agent.
+Usage: install.sh [--version cli@X.Y.Z] [--archive PATH]
+Installs or updates Seccy and its fnox provider.
 --archive PATH   Use a local archive (verify its provenance before running).
---install-only   Install files without sudo, device enrollment, or service setup.
 SECCY_REPOSITORY defaults to kossnocorp/seccy; XDG_BIN_HOME defaults to ~/.local/bin.
 EOF
 }
 # Parse the complete installer before running it when stdin contains the script.
 main() {
-archive= version= install_only=false
+archive= version=
 while (($#)); do
     case $1 in
         --archive|--version) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; option=$1; shift; if [[ $option == --archive ]]; then archive=$1; else version=$1; fi ;;
-        --install-only) install_only=true ;;
         -h|--help) usage; exit ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -28,12 +26,24 @@ arch=$(uname -m)
 [[ $arch != arm64 ]] || arch=aarch64
 case $os in Darwin) platform=macos; extension=zip ;; Linux) platform=linux; extension=tar.gz ;; *) echo 'Unsupported OS' >&2; exit 1 ;; esac
 case $arch in aarch64|x86_64) ;; *) echo 'Unsupported CPU' >&2; exit 1 ;; esac
-if [[ $install_only == false && ! -t 0 ]]; then
-    if ! { exec </dev/tty; } 2>/dev/null; then
-        echo 'Setup requires a terminal. Run from an interactive terminal or use --install-only.' >&2
-        exit 1
-    fi
+bin=${XDG_BIN_HOME:-"$HOME/.local/bin"}
+[[ $bin = /* ]] || { echo 'XDG_BIN_HOME must be absolute' >&2; exit 1; }
+data=${XDG_DATA_HOME:-"$HOME/.local/share"}
+[[ $data = /* ]] || data="$HOME/.local/share"
+prefix="$data/seccy"
+if [[ $os == Darwin ]]; then
+    executable="$prefix/Seccy.app/Contents/MacOS/seccy"
+else
+    executable="$prefix/bin/seccy"
 fi
+installed_version=$("$executable" --version 2>/dev/null) || installed_version=
+skip_if_installed() {
+    if [[ -n $1 && $installed_version == "seccy ${1#cli@}" ]]; then
+        echo "Seccy ${1#cli@} is already installed."
+        echo 'https://seccy.fyi/install'
+        exit 0
+    fi
+}
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/seccy-install.XXXXXXXX")
 trap 'rm -rf "$temporary"' EXIT
 if [[ -z $archive ]]; then
@@ -48,6 +58,7 @@ if [[ -z $archive ]]; then
         version=${url##*/}
     fi
     [[ $version =~ ^cli@[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected version cli@X.Y.Z' >&2; exit 1; }
+    skip_if_installed "$version"
     name="seccy-$version-$platform-$arch.$extension"
     archive="$temporary/$name"
     curl -fSL --proto '=https' --proto-redir '=https' "$base/download/$version/$name" -o "$archive"
@@ -58,23 +69,15 @@ if [[ -z $archive ]]; then
     [[ ${actual%% *} == "$expected" ]] || { echo 'Archive checksum mismatch' >&2; exit 1; }
 fi
 [[ -f $archive ]] || { echo "Archive not found: $archive" >&2; exit 1; }
-bin=${XDG_BIN_HOME:-"$HOME/.local/bin"}
-[[ $bin = /* ]] || { echo 'XDG_BIN_HOME must be absolute' >&2; exit 1; }
-data=${XDG_DATA_HOME:-"$HOME/.local/share"}
-[[ $data = /* ]] || data="$HOME/.local/share"
-prefix="$data/seccy"
 mkdir -p "$bin" "$temporary/extracted"
-for name in seccy seccy-tpm; do
-    if [[ -e "$bin/$name" && ! -L "$bin/$name" ]]; then
-        echo "Move existing file $bin/$name aside first" >&2; exit 1
-    fi
-done
 if [[ $os == Darwin ]]; then
     ditto -x -k "$archive" "$temporary/extracted"
     app="$temporary/extracted/Seccy.app"
     codesign --verify --strict "$app"
     xcrun stapler validate "$app"
     spctl --assess --type execute "$app"
+    candidate_version=$("$app/Contents/MacOS/seccy" --version)
+    skip_if_installed "${candidate_version#seccy }"
     mkdir -p "$prefix"
     destination="$prefix/Seccy.app"
     # Preserve the previous installation until the new bundle has been verified.
@@ -92,6 +95,11 @@ else
     for file in bin/seccy bin/seccy-tpm fnox/provider.lua system/seccy-tpm.conf system/seccy-tpm.service; do
         [[ -f $source/$file ]] || { echo "Incomplete archive: $file" >&2; exit 1; }
     done
+    if ! candidate_version=$("$source/bin/seccy" --version); then
+        echo 'Cannot run Seccy. See https://seccy.fyi/install' >&2
+        exit 1
+    fi
+    skip_if_installed "${candidate_version#seccy }"
     mkdir -p "$prefix/bin" "$prefix/fnox" "$prefix/system"
     for name in seccy seccy-tpm; do
         stage=$(mktemp "$prefix/bin/.$name.XXXXXXXX")
@@ -104,70 +112,11 @@ else
     executable="$prefix/bin/seccy"
 fi
 export PATH="$bin:$PATH"
-if [[ $os == Linux ]] && ! "$executable" --version; then
-    echo 'Install Linux runtime dependencies first; see https://github.com/kossnocorp/seccy/blob/main/docs/linux/README.md' >&2
-    exit 1
-fi
 "$executable" fnox init
 if command -v fnox >/dev/null; then
-    fnox plugin link seccy "$("$executable" fnox info --jq-raw .plugin_dir)"
-else
-    echo 'Install fnox >= 1.47, then run: fnox plugin link seccy "$(seccy fnox info --jq-raw .plugin_dir)"'
+    fnox plugin link --force seccy "$("$executable" fnox info --jq-raw .plugin_dir)"
 fi
-if [[ $install_only == true ]]; then
-    printf 'Installed. Add %s to PATH. Rerun without --install-only to configure services and keys.\n' "$bin"
-    exit
-fi
-if [[ $os == Linux ]]; then
-    sudo install -d -m 755 /usr/local/libexec /etc/sysusers.d /etc/systemd/system
-    sudo install -o root -g root -m 755 "$prefix/bin/seccy-tpm" /usr/local/libexec/seccy-tpm
-    sudo install -o root -g root -m 644 "$prefix/system/seccy-tpm.conf" /etc/sysusers.d/seccy-tpm.conf
-    sudo systemd-sysusers /etc/sysusers.d/seccy-tpm.conf
-    sudo install -o root -g root -m 644 "$prefix/system/seccy-tpm.service" /etc/systemd/system/seccy-tpm.service
-    sudo systemctl daemon-reload
-    sudo systemctl enable seccy-tpm.service
-    sudo systemctl restart seccy-tpm.service
-    "$executable" init --list
-    read -r -p 'FIDO2 device path for enrollment (empty uses automatic selection): ' device
-    if [[ -n $device ]]; then "$executable" init --device "$device"; else "$executable" init; fi
-fi
-config=${XDG_CONFIG_HOME:-"$HOME/.config"}
-[[ $config = /* ]] || config="$HOME/.config"
-mkdir -p "$config/seccy"
-if [[ ! -e $config/seccy/config.toml ]]; then
-    (umask 077; set -o noclobber; cat > "$config/seccy/config.toml" <<'EOF'
-log_level = "info"
-
-[keys.personal]
-mode = "prompt"
-github = "auth"
-
-[keys.signing]
-mode = "prompt"
-github = "signing"
-
-[keys.secrets]
-mode = "prompt"
-EOF
-    )
-fi
-"$executable" provision
-"$executable" service install
-"$executable" service status
-state=${XDG_STATE_HOME:-"$HOME/.local/state"}
-[[ $state = /* ]] || state="$HOME/.local/state"
-runtime=${XDG_RUNTIME_DIR:-"$state"}
-[[ $runtime = /* ]] || runtime="$state"
-socket="$runtime/seccy/agent.sock"
-mkdir -p "$config/seccy"
-printf 'export PATH=%q:"$PATH"\nexport SSH_AUTH_SOCK=%q\n' "$bin" "$socket" > "$config/seccy/env.sh"
-printf '\nSetup complete. Add this to your Bash/Zsh startup file:\n  source %q\n' "$config/seccy/env.sh"
-printf 'Public keys: %s/seccy/keys\nConfig: %s/seccy/config.toml\n' "$state" "$config"
-echo 'Register public keys with your host (or use seccy gh sync after gh auth login).'
-echo 'For Git signing: git config --global gpg.format ssh'
-printf '  git config --global user.signingkey %q\n' "$state/seccy/keys/signing.pub"
-echo '  git config --global commit.gpgsign true'
+echo 'https://seccy.fyi/install'
 }
 
-# Exit without asking Bash to read further commands from the setup terminal.
 main "$@"; exit "$?"

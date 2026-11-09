@@ -2,6 +2,7 @@
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -15,7 +16,7 @@ class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.home = self.root / "home with spaces"
         self.home.mkdir()
         self.tools = self.root / "tools"
@@ -25,17 +26,20 @@ class InstallerTests(unittest.TestCase):
                         XDG_STATE_HOME=str(self.home / ".local/state"),
                         XDG_BIN_HOME=str(self.home / ".local/bin"),
                         PATH=f"{self.tools}:/usr/bin:/bin")
+        if not shutil.which("sha256sum", path="/usr/bin:/bin"):
+            self.command("sha256sum", 'exec shasum -a 256 "$@"')
         self.command("id", "echo 1000")
         self.command("uname", 'if [ "$1" = -s ]; then echo Linux; else echo x86_64; fi')
-        self.command("fnox", "exit 0")
+        self.command("fnox", 'test "$1 $2 $3 $4" = "plugin link --force seccy"')
         self.source = self.root / "seccy"
         for directory in ("bin", "fnox", "system"):
             (self.source / directory).mkdir(parents=True)
         (self.source / "bin/seccy").write_text(
-            '#!/bin/sh\nif [ "$1 $2" = "fnox info" ]; then echo "$HOME/plugin"; fi\n')
+            '#!/bin/sh\ncase "$1 $2" in\n"--version " ) echo "seccy 0.1.0" ;;\n"fnox info") echo "$HOME/plugin" ;;\n"fnox init") ;;\n*) exit 99 ;;\nesac\n')
         (self.source / "bin/seccy-tpm").write_text("#!/bin/sh\nexit 0\n")
         for file in ("fnox/provider.lua", "system/seccy-tpm.conf", "system/seccy-tpm.service"):
             (self.source / file).write_text("fixture\n")
+        (self.source / "bin/seccy").chmod(0o755)
         self.archive = self.root / "seccy-cli@0.1.0-linux-x86_64.tar.gz"
         self.pack()
 
@@ -49,7 +53,7 @@ class InstallerTests(unittest.TestCase):
             archive.add(self.source, arcname="seccy")
 
     def run_install(self, *args):
-        return subprocess.run(["bash", str(INSTALLER), "--install-only", *args],
+        return subprocess.run(["bash", str(INSTALLER), *args],
                               env=self.env, capture_output=True, text=True)
 
     def test_install_and_upgrade_preserve_state_and_config(self):
@@ -67,42 +71,64 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(config.read_text(), "existing config")
         self.assertEqual(state.read_text(), "existing keys")
 
-    def test_existing_command_is_preserved(self):
+    def test_same_version_skips_and_new_version_updates(self):
+        result = self.run_install("--archive", str(self.archive))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        binary = self.home / ".local/share/seccy/bin/seccy"
+        before = binary.stat().st_mtime_ns
+        result = self.run_install("--archive", str(self.archive))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already installed", result.stdout)
+        self.assertEqual(binary.stat().st_mtime_ns, before)
+        # A matching explicit release must not even download the archive.
+        self.command("curl", "exit 99")
+        result = self.run_install("--version", "cli@0.1.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already installed", result.stdout)
+        source = self.source / "bin/seccy"
+        source.write_text(source.read_text().replace("0.1.0", "0.2.0"))
+        self.pack()
+        result = self.run_install("--archive", str(self.archive))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("0.2.0", binary.read_text())
+
+    def test_existing_command_is_replaced(self):
         command = self.home / ".local/bin/seccy"
         command.parent.mkdir(parents=True)
         command.write_text("other installation")
         result = self.run_install("--archive", str(self.archive))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(command.read_text(), "other installation")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(command.is_symlink())
 
-    def test_piped_script_installs_without_a_terminal_in_install_only_mode(self):
+    def test_piped_script_installs_without_a_terminal(self):
         result = subprocess.run(
-            ["bash", "-s", "--", "--install-only", "--archive", str(self.archive)],
+            ["bash", "-s", "--", "--archive", str(self.archive)],
             input=INSTALLER.read_text(), env=self.env, capture_output=True, text=True,
             start_new_session=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.home / ".local/bin/seccy").is_symlink())
 
-    def test_piped_setup_without_terminal_reports_actionable_error(self):
+    def test_piped_install_needs_no_terminal_or_setup(self):
         result = subprocess.run(
             ["bash", "-s", "--", "--archive", str(self.archive)],
             input=INSTALLER.read_text(), env=self.env, capture_output=True, text=True,
             start_new_session=True,
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Setup requires a terminal", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.home / ".config").exists())
+        self.assertFalse((self.home / ".local/state").exists())
 
-    def test_existing_command_is_preserved_when_piped(self):
+    def test_existing_command_is_replaced_when_piped(self):
         command = self.home / ".local/bin/seccy"
         command.parent.mkdir(parents=True)
         command.write_text("other installation")
         result = subprocess.run(
-            ["bash", "-s", "--", "--install-only", "--archive", str(self.archive)],
+            ["bash", "-s", "--", "--archive", str(self.archive)],
             input=INSTALLER.read_text(), env=self.env, capture_output=True, text=True,
         )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(command.read_text(), "other installation")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(command.is_symlink())
 
     def test_incomplete_archive_is_rejected(self):
         (self.source / "system/seccy-tpm.service").unlink()
@@ -173,7 +199,9 @@ fi
                     self.env["XDG_DATA_HOME"] = value
                 data = Path(value) if value and value.startswith("/") else self.home / ".local/share"
                 destination = data / "seccy/Seccy.app"
-                for revision in ("first", "updated"):
+                for version, revision in (("0.1.0", "first"), ("0.2.0", "updated")):
+                    executable = app / "Contents/MacOS/seccy"
+                    executable.write_text((self.source / "bin/seccy").read_text().replace("0.1.0", version))
                     (app / "Contents/embedded.provisionprofile").write_text(revision)
                     result = self.run_install("--archive", str(self.archive))
                     self.assertEqual(result.returncode, 0, result.stderr)
@@ -183,12 +211,14 @@ fi
                 self.assertFalse((self.home / "Applications").exists())
 
     def test_macos_failed_verification_or_copy_preserves_installed_bundle(self):
-        self.macos_fixture()
+        app = self.macos_fixture()
         result = self.run_install("--archive", str(self.archive))
         self.assertEqual(result.returncode, 0, result.stderr)
         destination = self.home / ".local/share/seccy/Seccy.app"
         marker = destination / "previous-installation"
         marker.write_text("preserve")
+        executable = app / "Contents/MacOS/seccy"
+        executable.write_text(executable.read_text().replace("0.1.0", "0.2.0"))
         for failure in ("FAIL_VERIFY", "FAIL_COPY"):
             with self.subTest(failure=failure):
                 self.env[failure] = "1"

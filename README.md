@@ -7,9 +7,16 @@ curl -fsSL https://seccy.fyi/install.sh | bash
 ```
 
 Requires a supported desktop session and hardware; see platform requirements below.
-The installer sets up the complete app/binaries, fnox provider, keys and login
-agent, including the Linux TPM system service. Use `--install-only` for files only,
-or `--archive PATH` for a locally verified release archive.
+The installer updates the app/binaries and fnox provider, skipping an already
+installed version. It never provisions keys, writes user configuration, or installs
+or restarts services. Use `--archive PATH` for a locally verified release archive.
+
+For setup instructions, see https://seccy.fyi/install.
+
+Add `eval "$(seccy activate zsh)"` to your Zsh startup file, or
+`eval "$(seccy activate bash)"` for Bash. `seccy activate [SHELL_TYPE]` prints
+PATH and SSH_AUTH_SOCK setup for bash, elvish, fish, nu, xonsh, zsh, pwsh, or
+powershell; when omitted, the shell is detected from `SHELL`.
 
 Prebuilt releases support macOS Apple Silicon and Linux x86_64/ARM64. Intel
 macOS requires building and packaging from source.
@@ -22,9 +29,8 @@ Both platforms install beneath `$XDG_DATA_HOME/seccy`, defaulting to
 - Commands are symlinked into `~/.local/bin`, or an absolute `XDG_BIN_HOME`
   (a project convention, not an XDG standard).
 
-Rerun the installer to update; normal setup refreshes the login service's
-executable path. With `--install-only`, run `seccy service install` afterward to
-refresh and restart an existing service. Configuration, keys, and state are kept
+Rerun the installer to update. Run `seccy service install` yourself when ready
+to install or refresh the login service. Configuration, keys, and state are kept
 separately from the installed bundle. The per-user installation is writable by
 your user: signature/notarization checks do not provide the file-replacement
 protection of an administrator-owned installation. macOS verification still uses
