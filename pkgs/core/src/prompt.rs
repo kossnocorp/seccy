@@ -1,5 +1,5 @@
 //! Shared natural-language text for native authorization dialogs.
-use crate::{Caller, ProcessInfo, payload::Payload};
+use crate::{Caller, Mode, ProcessInfo, payload::Payload};
 use std::path::Path;
 
 pub(crate) fn value(text: &str) -> String {
@@ -67,9 +67,13 @@ impl Caller {
         })
     }
 
-    pub(crate) fn request(&self, heading: &str, key: &str, purpose: &str) -> String {
+    pub(crate) fn request(&self, heading: &str, key: &str, purpose: &str, mode: Mode) -> String {
+        let action = match mode {
+            Mode::Prompt => "wants to use",
+            Mode::Notify => "used",
+        };
         format!(
-            "{heading}\n\n{} wants to use the {} key {purpose}.",
+            "{heading}\n\n{} {action} the {} key {purpose}.",
             self.summary(),
             value(key)
         )
@@ -77,7 +81,7 @@ impl Caller {
 }
 
 impl Payload {
-    pub(crate) fn prompt(&self, key: &str, caller: &Caller) -> String {
+    pub(crate) fn prompt(&self, key: &str, caller: &Caller, mode: Mode) -> String {
         let (heading, purpose) = match self {
             Self::Unknown => (
                 "Approve this signing request?".into(),
@@ -130,7 +134,14 @@ impl Payload {
                 (heading, text)
             }
         };
-        let mut text = caller.request(&heading, key, &purpose);
+        let heading = match mode {
+            Mode::Prompt => heading.as_str(),
+            Mode::Notify => match self {
+                Self::SshAuthentication { .. } => "SSH authentication request signed.",
+                _ => "Data signed.",
+            },
+        };
+        let mut text = caller.request(heading, key, &purpose, mode);
         let status = self.summary();
         if !status.is_empty() {
             text.push('\n');

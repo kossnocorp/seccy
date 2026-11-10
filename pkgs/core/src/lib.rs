@@ -115,14 +115,18 @@ impl Identity {
         caller: &Caller,
         payload: &payload::Payload,
     ) -> String {
-        payload.prompt(&self.name, caller)
+        payload.prompt(&self.name, caller, self.mode)
     }
 
     pub fn decrypt_description(&self, _algorithm: &str, caller: &Caller) -> String {
         caller.request(
-            "Approve this decryption request?",
+            match self.mode {
+                Mode::Prompt => "Approve this decryption request?",
+                Mode::Notify => "Secret decrypted.",
+            },
             &self.name,
             "to decrypt a secret",
+            self.mode,
         )
     }
 
