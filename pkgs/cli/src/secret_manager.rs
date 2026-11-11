@@ -11,35 +11,15 @@ use serde_json::json;
 use std::{
     collections::BTreeSet,
     fs::OpenOptions,
-    io::{BufRead, BufReader, IsTerminal, Read, Write},
+    io::{IsTerminal, Read, Write},
     os::unix::{fs::OpenOptionsExt, process::CommandExt},
     process::Command,
 };
 use zeroize::Zeroizing;
 
 fn choose(items: &[String], label: &str, output: &Output) -> Result<String> {
-    ensure!(!items.is_empty(), "no {label} available");
-    ensure!(
-        !output.structured(),
-        "specify {label} explicitly with structured output"
-    );
-    let mut tty = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .context("selection requires a terminal; specify a name")?;
-    for (i, item) in items.iter().enumerate() {
-        writeln!(tty, "{}. {}", i + 1, item)?;
-    }
-    write!(tty, "Select {label} [1-{}]: ", items.len())?;
-    tty.flush()?;
-    let mut line = String::new();
-    BufReader::new(tty).read_line(&mut line)?;
-    let index: usize = line.trim().parse().context("invalid selection")?;
-    items
-        .get(index.wrapping_sub(1))
-        .cloned()
-        .context("invalid selection")
+    let index = crate::selection::choose(items, label, output)?;
+    Ok(items[index].clone())
 }
 fn hidden() -> Result<Zeroizing<Vec<u8>>> {
     use std::os::fd::AsRawFd;
@@ -159,11 +139,10 @@ fn decrypt(name: &str, secret: &Secret, selected: Option<&str>) -> Result<Zeroiz
     }
     Ok(result)
 }
-pub fn run(args: SecretsArgs, output: &Output) -> Result<()> {
+pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
     let paths = Paths::from_env()?;
     let global = paths.config.with_file_name("secrets.toml");
     let cwd = std::env::current_dir()?;
-    let mut config = Config::load(&global, &cwd, args.file.as_deref(), args.global)?;
     let mutation = matches!(
         args.command,
         SecretsCommand::Set(_)
@@ -174,6 +153,32 @@ pub fn run(args: SecretsArgs, output: &Output) -> Result<()> {
                 command: RecipientCommand::Add(_) | RecipientCommand::Remove(_)
             })
     );
+    ensure!(
+        !(args.global && args.file.is_some()),
+        "--global and --secrets are mutually exclusive"
+    );
+    if mutation && !args.global && args.file.is_none() {
+        let mut detected = crate::secret_config::detected_files(&global, &cwd)?;
+        detected.reverse(); // closest project first, global last
+        if detected.len() > 1 {
+            ensure!(
+                !output.structured(),
+                "multiple secrets files found; select one with --secrets (-s) or --global (-g)"
+            );
+            let labels = detected
+                .iter()
+                .map(|p| crate::secret_config::file_label(p))
+                .collect::<Vec<_>>();
+            let index = crate::selection::choose(
+                &labels,
+                "secrets file (--secrets/-s or --global/-g)",
+                output,
+            )?;
+            // Exactly the same isolated scope as an explicit --secrets selection.
+            args.file = Some(detected[index].clone());
+        }
+    }
+    let mut config = Config::load(&global, &cwd, args.file.as_deref(), args.global)?;
     let _file_lock = if mutation {
         let parent = config.target.parent().context("invalid secrets path")?;
         if config.target == global {
@@ -379,7 +384,7 @@ pub fn run(args: SecretsArgs, output: &Output) -> Result<()> {
         SecretsCommand::Remove(remove) => {
             ensure!(
                 config.origins.get(&remove.name) == Some(&config.target),
-                "secret is not defined in active file; use --file or --global"
+                "secret is not defined in active file; use --secrets or --global"
             );
             config.target_doc()["secrets"]
                 .as_table_like_mut()

@@ -31,6 +31,11 @@
 - [ ] Extend the initial macOS multi-recipient secrets envelope to other eligible hardware backends; consider actual age interoperability/plugin support separately from age-style semantics.
 - [ ] Explore `seccy secrets session -- <command>`: authenticate a scoped session without exporting secrets up front; subsequent `get` calls within that session notify instead of prompting. Define OS-authenticated process scope, expiry, revocation, child inheritance, concurrency and replay protection. An environment variable alone must not be an authorization capability. Explain that hardware per-operation biometric/UV policies may prevent this mode; do not weaken strict keys silently. Explicit get still reveals plaintext to its caller.
 
+## CLI configuration and integrations
+
+- [ ] Add global configuration-path overrides: `--config PATH` (`-c`; also support the requested `--c` alias) and `--global-secrets PATH` (`--gs`). Resolve these once for all dependent commands, rather than treating them as project-file selection. `seccy provision -c ./seccy.config.toml` must read that key config; `seccy s set -g GLOBAL_SECRET -c ./seccy.config.toml` must use the selected key config. `--global-secrets` must replace the global secrets path both during hierarchical discovery and for `-g` operations. Document independent defaults/precedence; specifying `--config` must not silently redirect secrets to an unrelated path.
+- [ ] Add GitLab CLI integration through `seccy glab ...`, including `seccy glab sync`, matching the GitHub integration's key reconciliation and fingerprint naming. Document `glab` authentication, GitLab host selection, required API scopes/permissions, and authentication/signing key support. Test self-managed hosts, rotation, duplicates and error reporting.
+
 ## Research references
 
 - [YubiKey comparison](https://www.yubico.com/sg/store/compare/)

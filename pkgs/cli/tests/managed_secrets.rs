@@ -55,7 +55,7 @@ fn set(dir: &Path, name: &str, bytes: &[u8]) {
 fn mock_agent(
     dir: &Path,
     responses: Vec<Result<Vec<u8>, &'static str>>,
-) -> std::thread::JoinHandle<()> {
+) -> std::thread::JoinHandle<Vec<Value>> {
     let paths = seccy_core::storage::Paths::resolve(Some(dir), |name| match name {
         "XDG_CONFIG_HOME" => Some(dir.join("config")),
         "XDG_STATE_HOME" => Some(dir.join("state")),
@@ -90,6 +90,7 @@ fn mock_agent(
     // Nonblocking accept gives a failing CLI test a bounded failure instead of a hang.
     listener.set_nonblocking(true).unwrap();
     std::thread::spawn(move || {
+        let mut requests = Vec::new();
         for response in responses {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let mut stream = loop {
@@ -115,6 +116,7 @@ fn mock_agent(
             .unwrap();
             assert_eq!(request["operation"], "decrypt-managed");
             assert_eq!(request["key"], "test-key");
+            requests.push(request);
             let response = match response {
                 Ok(bytes) => json!({"ok":true,"value_base64":B64.encode(bytes)}),
                 Err(error) => json!({"ok":false,"error":error}),
@@ -123,6 +125,7 @@ fn mock_agent(
                 .unwrap();
         }
         fs::remove_file(socket).unwrap();
+        requests
     })
 }
 #[test]
@@ -312,4 +315,227 @@ fn invalid_input_cannot_replace_existing_config() {
         .arg("--json")
         .output()
         .unwrap());
+}
+
+fn write_scope(path: &Path, values: &[(&str, &str)]) -> Value {
+    let public = envelope::from_identity(&identity()).unwrap();
+    let mut secrets = serde_json::Map::new();
+    for (name, value) in values {
+        let encrypted = envelope::encrypt(
+            name,
+            value.as_bytes(),
+            std::slice::from_ref(&public),
+            seccy_macos::wrap_secret_key,
+        )
+        .unwrap();
+        secrets.insert(
+            (*name).into(),
+            json!({"recipients":["mac"], "value":encrypted}),
+        );
+    }
+    let data = json!({"recipients":{"mac":public}, "secrets":secrets});
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::set_permissions(path.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(path, toml::to_string(&data).unwrap()).unwrap();
+    data
+}
+
+#[test]
+fn hierarchy_and_explicit_short_flags_read_and_update_only_selected_scope() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let parent = root.join("project");
+    let cwd = parent.join("nested");
+    fs::create_dir_all(&cwd).unwrap();
+    let global = cwd.join("config/seccy/secrets.toml");
+    let parent_file = parent.join("seccy.toml");
+    let local = cwd.join("seccy.toml");
+    let global_data = write_scope(&global, &[("ASD", "global"), ("GLOBAL_ONLY", "g")]);
+    write_scope(&parent_file, &[("ASD", "parent"), ("PARENT_ONLY", "p")]);
+    let local_data = write_scope(&local, &[("ASD", "local"), ("LOCAL_ONLY", "l")]);
+    let merged = ok(cmd(&cwd).args(["s", "list", "--json"]).output().unwrap());
+    assert_eq!(merged["secrets"].as_array().unwrap().len(), 4);
+    assert_eq!(merged["secrets"][0]["source"], local.to_str().unwrap());
+    for flag in ["-g", "--global"] {
+        let isolated = ok(cmd(&cwd)
+            .args(["s", "list", flag, "--json"])
+            .output()
+            .unwrap());
+        assert_eq!(isolated["secrets"].as_array().unwrap().len(), 2);
+        assert_eq!(isolated["secrets"][0]["source"], global.to_str().unwrap());
+    }
+    for flag in ["-s", "--secrets", "--file"] {
+        let isolated = ok(cmd(&cwd)
+            .args(["s", "list", flag])
+            .arg(&parent_file)
+            .arg("--json")
+            .output()
+            .unwrap());
+        assert_eq!(isolated["secrets"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            isolated["secrets"][0]["source"],
+            parent_file.to_str().unwrap()
+        );
+    }
+    let server = mock_agent(&cwd, vec![Ok(b"global".to_vec()), Ok(b"local".to_vec())]);
+    let out = cmd(&cwd).args(["s", "get", "-g", "ASD"]).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout, b"global");
+    let out = cmd(&cwd)
+        .args(["s", "get", "-s"])
+        .arg(&local)
+        .arg("ASD")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout, b"local");
+    let requests = server.join().unwrap();
+    for (request, expected) in requests.iter().zip([global_data, local_data]) {
+        let body: Value = serde_json::from_str(request["value"].as_str().unwrap()).unwrap();
+        assert_eq!(body["value"], expected["secrets"]["ASD"]["value"]);
+    }
+    let before = fs::read(&local).unwrap();
+    ok(cmd(&cwd)
+        .args(["s", "set", "-g", "NEW", "--from-stdin", "--json"])
+        .output()
+        .unwrap());
+    assert_eq!(fs::read(&local).unwrap(), before);
+    let before_global = fs::read(&global).unwrap();
+    ok(cmd(&cwd)
+        .args(["s", "set", "-s"])
+        .arg(&local)
+        .args(["NEW_LOCAL", "--from-stdin", "--json"])
+        .output()
+        .unwrap());
+    assert_eq!(fs::read(&global).unwrap(), before_global);
+    for args in [
+        vec!["s", "set", "ASD", "--from-stdin", "--json"],
+        vec!["s", "enroll", "test-key", "--json"],
+        vec!["s", "list", "-g", "-s", "other", "--json"],
+    ] {
+        let output = cmd(&cwd).args(args).output().unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("--secrets"));
+    }
+}
+
+// Real controlling-terminal test: /dev/tty must be distinct from piped secret input.
+fn pick_file(dir: &Path, args: &[&str], keys: &[u8], input: &[u8]) -> Output {
+    use std::{
+        io::Read,
+        os::fd::{AsRawFd, FromRawFd},
+        os::unix::process::CommandExt,
+    };
+    let mut master = -1;
+    let mut slave = -1;
+    let mut size = libc::winsize {
+        ws_row: 24,
+        ws_col: 120,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        },
+        0
+    );
+    let mut master = unsafe { fs::File::from_raw_fd(master) };
+    let slave = unsafe { fs::File::from_raw_fd(slave) };
+    let mut command = cmd(dir);
+    command
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(slave.try_clone().unwrap()));
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 || libc::ioctl(2, libc::TIOCSCTTY.into(), 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut screen = Vec::new();
+    while !String::from_utf8_lossy(&screen).contains("recipients:") {
+        let mut poll = libc::pollfd {
+            fd: master.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut poll, 1, 50) } > 0 {
+            let mut buf = [0; 4096];
+            let n = master.read(&mut buf).unwrap();
+            screen.extend_from_slice(&buf[..n]);
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!(
+                "picker did not render: {}",
+                String::from_utf8_lossy(&screen)
+            );
+        }
+    }
+    assert!(String::from_utf8_lossy(&screen).contains("recipients:"));
+    master.write_all(keys).unwrap();
+    while child.try_wait().unwrap().is_none() {
+        let mut poll = libc::pollfd {
+            fd: master.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut poll, 1, 10) } > 0 {
+            let mut buf = [0; 4096];
+            let n = master.read(&mut buf).unwrap();
+            screen.extend_from_slice(&buf[..n]);
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!(
+                "picker did not complete: {}",
+                String::from_utf8_lossy(&screen)
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn arrow_picker_isolated_selection_and_cancellation_preserve_other_files() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let cwd = dir.path();
+    let global = cwd.join("config/seccy/secrets.toml");
+    let local = cwd.join("seccy.toml");
+    write_scope(&global, &[("GLOBAL_ONLY", "global")]);
+    write_scope(&local, &[("LOCAL_ONLY", "local")]);
+    let local_before = fs::read(&local).unwrap();
+    let output = pick_file(
+        cwd,
+        &["s", "set", "PIPED", "--from-stdin"],
+        b"\x1b[B\r",
+        b"secret input, not picker input",
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(fs::read(&local).unwrap(), local_before);
+    let global_after = fs::read(&global).unwrap();
+    assert!(String::from_utf8_lossy(&global_after).contains("PIPED"));
+    assert!(!String::from_utf8_lossy(&global_after).contains("LOCAL_ONLY"));
+    assert!(!String::from_utf8_lossy(&global_after).contains("secret input, not picker input"));
+    let output = pick_file(cwd, &["s", "recipients", "remove", "mac"], b"\x1b", b"");
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&local).unwrap(), local_before);
+    assert_eq!(fs::read(&global).unwrap(), global_after);
+    let output = pick_file(cwd, &["s", "remove", "GLOBAL_ONLY"], b"\x1b[B\x1b[A\r", b"");
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&global).unwrap(), global_after);
 }

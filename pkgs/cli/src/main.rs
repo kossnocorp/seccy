@@ -20,6 +20,8 @@ mod secret_config;
 mod secret_manager;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod secrets;
+#[cfg(target_os = "macos")]
+mod selection;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod server;
 #[cfg(target_os = "macos")]

@@ -61,11 +61,60 @@ fn read(path: &Path) -> Result<Option<String>> {
     );
     Ok(Some(text))
 }
+/// Global first, then every ancestor including filesystem root, ending at cwd.
+fn candidates(global: &Path, cwd: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![global.to_owned()];
+    for path in cwd
+        .ancestors()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|p| p.join("seccy.toml"))
+    {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+pub fn detected_files(global: &Path, cwd: &Path) -> Result<Vec<PathBuf>> {
+    candidates(global, cwd)
+        .into_iter()
+        .filter_map(|p| match p.try_exists() {
+            Ok(true) => Some(Ok(p)),
+            Ok(false) => None,
+            Err(e) => Some(Err(e.into())),
+        })
+        .collect()
+}
+
+/// Public names only, for the file picker. Do not display parser diagnostics or values.
+pub fn file_label(path: &Path) -> String {
+    let summary = read(path)
+        .ok()
+        .flatten()
+        .and_then(|s| toml::from_str::<Data>(&s).ok());
+    let path = seccy_core::state::display_path(path);
+    match summary {
+        Some(data) => format!(
+            "{path}  [recipients: {}; secrets: {}]",
+            data.recipients
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+            data.secrets.keys().cloned().collect::<Vec<_>>().join(", ")
+        ),
+        None => path,
+    }
+}
+
 impl Config {
     pub fn load(global: &Path, cwd: &Path, file: Option<&Path>, global_only: bool) -> Result<Self> {
         ensure!(
             !(file.is_some() && global_only),
-            "--file and --global are mutually exclusive"
+            "--secrets and --global are mutually exclusive"
         );
         let mut paths = vec![global.to_owned()];
         let target;
@@ -75,15 +124,13 @@ impl Config {
             } else {
                 cwd.join(file)
             };
-            // --file is isolated: portable files must not depend on implicit global recipients.
+            // --secrets is isolated: portable files must not depend on implicit global recipients.
             paths = vec![target.clone()];
         } else if global_only {
             target = global.to_owned();
         } else {
-            let mut parents: Vec<_> = cwd.ancestors().map(|p| p.join("seccy.toml")).collect();
-            parents.reverse();
-            for path in parents {
-                if path.try_exists()? && !paths.contains(&path) {
+            for path in detected_files(global, cwd)? {
+                if !paths.contains(&path) {
                     paths.push(path);
                 }
             }
@@ -308,6 +355,59 @@ mod tests {
         assert_eq!(config.origins["TOKEN"], local);
         assert_eq!(config.target, local);
     }
+    #[test]
+    fn every_ancestor_including_root_is_a_candidate_and_closer_secrets_win() {
+        let global = Path::new("/home/test/.config/seccy/secrets.toml");
+        assert_eq!(
+            candidates(global, Path::new("/a/b")),
+            vec![
+                global.to_owned(),
+                PathBuf::from("/seccy.toml"),
+                PathBuf::from("/a/seccy.toml"),
+                PathBuf::from("/a/b/seccy.toml")
+            ]
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let parent = dir.path().join("project");
+        let cwd = parent.join("child");
+        fs::create_dir_all(&cwd).unwrap();
+        let public = recipient();
+        for (path, unique, value) in [
+            (&global, "GLOBAL_ONLY", "global"),
+            (&parent.join("seccy.toml"), "PARENT_ONLY", "parent"),
+            (&cwd.join("seccy.toml"), "LOCAL_ONLY", "local"),
+        ] {
+            let mut config = Config::load(&global, &cwd, Some(path), false).unwrap();
+            config.put_recipient("mac", &public).unwrap();
+            for name in ["SHARED", unique] {
+                let secret = Secret {
+                    recipients: vec!["mac".into()],
+                    value: envelope::encrypt(
+                        name,
+                        value.as_bytes(),
+                        std::slice::from_ref(&public),
+                        |_, _| Ok("test-wrap".into()),
+                    )
+                    .unwrap(),
+                };
+                config.put_secret(name, &secret);
+            }
+            config.save().unwrap();
+        }
+        let merged = Config::load(&global, &cwd, None, false).unwrap();
+        assert_eq!(merged.secrets.len(), 4);
+        assert_eq!(merged.origins["SHARED"], cwd.join("seccy.toml"));
+        assert_eq!(merged.origins["GLOBAL_ONLY"], global);
+        assert_eq!(merged.origins["PARENT_ONLY"], parent.join("seccy.toml"));
+        fs::remove_file(cwd.join("seccy.toml")).unwrap();
+        let merged = Config::load(&global, &cwd, None, false).unwrap();
+        assert_eq!(merged.origins["SHARED"], parent.join("seccy.toml"));
+        let isolated = Config::load(&global, &cwd, None, true).unwrap();
+        assert_eq!(isolated.secrets.len(), 2);
+        assert_eq!(isolated.origins["SHARED"], global);
+    }
+
     #[test]
     fn rejects_mismatched_recipients_plaintext_unknown_fields_and_symlink_writes() {
         let dir = tempfile::tempdir().unwrap();

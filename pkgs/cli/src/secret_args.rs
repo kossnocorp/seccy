@@ -4,10 +4,10 @@ use usage_rs::{Args, Subcommands};
 #[derive(Args)]
 pub struct SecretsArgs {
     /// Use only the user secrets.toml
-    #[usage(long, global)]
+    #[usage(short = 'g', long, global)]
     pub global: bool,
     /// Use only this secrets file
-    #[usage(long, global)]
+    #[usage(short = 's', long = "secrets", alias = "file", global)]
     pub file: Option<PathBuf>,
     /// Local enrolled identity to use for decryption (otherwise match automatically)
     #[usage(long, global)]

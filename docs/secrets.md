@@ -15,10 +15,12 @@ seccy s enroll personal
 seccy s set DATABASE_URL
 seccy s list
 seccy s get DATABASE_URL
+seccy s get -g DATABASE_URL                 # ignore project definitions
+seccy s get -s ~/code/project/seccy.toml DATABASE_URL
 seccy s exec DATABASE_URL -- ./application
 ```
 
-`enroll` without a key shows a numbered picker of registered prompt keys. It marks
+`enroll` without a key shows an arrow-key picker of registered prompt keys. It marks
 the selected key `secrets = true` in Seccy's internal registry and adds its public
 recipient to the active secrets file. `seccy list --json` and `get --json` expose
 that marker. It does not create a private key, change its hardware ACL, or remove
@@ -67,12 +69,26 @@ change the configured recipients can redirect newly encrypted secrets.
 
 By default, mutations write the nearest existing project `seccy.toml`, or create
 one in the current directory. Setting an inherited secret creates an override in
-that active file. Existing comments are preserved. Public recipients referenced
-by a newly written secret are copied into that file, keeping it portable.
+that active file when there is no ambiguity. If multiple existing secrets files
+are detected, mutations (`set`, `enroll`, `reencrypt`, `remove`, and recipient
+add/remove) first show an arrow-key file picker, closest file first and global last.
+Each row includes recipient aliases and secret names, never values. Use Up/Down
+(or j/k), then Enter; Escape or Ctrl-C cancels without changing any files. Picking
+a file is exactly equivalent to passing `--secrets PATH`: only that file is loaded,
+so inherited secrets and recipients are not included for that operation. Explicit
+`-g` or `-s` skips the picker. Structured output and noninteractive invocations must
+specify `-g` or `-s` when multiple files exist. Piped `--from-stdin` values remain
+untouched because selection uses the controlling terminal.
 
-- `--global` reads and writes only the user secrets file.
-- `--file PATH` reads and writes only the specified file, without global inheritance.
+Existing comments are preserved. Public recipients referenced by a newly written
+secret are copied into that file, keeping it portable.
+
+- `-g` / `--global` reads and writes only the user secrets file.
+- `-s PATH` / `--secrets PATH` reads and writes only the specified file, without global inheritance.
 - Both options can appear after the subcommand; they are mutually exclusive.
+  `--file` remains a compatibility alias for `--secrets`.
+- Without either flag, read commands (`list`, `get`, `exec`, `recipients list`)
+  always merge the full hierarchy and never ask which file to read.
 - `list --json` reports the active file and the source of each effective secret.
 - `reencrypt` changes only secrets defined in the active file, not inherited ones.
 - `remove NAME` removes only an active-file definition; an inherited value may
@@ -115,7 +131,7 @@ seccy s recipients remove macbook
 
 A recipient cannot be removed while referenced by an effective secret. Re-encrypt
 to the remaining recipients first. To manage an ancestor/user file explicitly,
-use `--file`/`--global`. Removing a recipient cannot revoke old ciphertext copies:
+use `--secrets`/`--global`. Removing a recipient cannot revoke old ciphertext copies:
 rotate the underlying credential if its previous recipient was compromised.
 Enroll a second hardware recipient before losing or deleting the first device's
 key. Public metadata alone cannot recover secrets. Key replacement changes the
