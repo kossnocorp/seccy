@@ -50,6 +50,7 @@ Config-driven Secure Enclave SSH agent and CLI, written in Rust with [usage](htt
 - `notify`: no biometric prompt; send a macOS notification identifying the key and local client executable/PID after signing.
 - `--json`: machine-readable command results and errors; newline-delimited events for the foreground agent.
 - `encrypt` / `decrypt`: authenticated encryption with a selected Secure Enclave key, including a fnox Lua provider.
+- `secrets` / `s`: [multi-recipient managed secrets](docs/secrets.md), public-only encryption, Secure Enclave decryption, and command environment injection (macOS).
 
 ## Build
 
@@ -301,8 +302,9 @@ registered keys' modes, and choose a top-level `email` default with per-key
 `email` overrides where needed.
 Run `seccy provision` to register or reuse those keys and update their recorded
 source to the global path. Keys absent from the merged file remain registered.
-Local `seccy.toml` files are ignored, even when malformed; neither the current
-directory nor its parents are searched. Remove old `--config` arguments and fnox
+Key provisioning ignores local `seccy.toml` files, even when malformed; it does not
+search the current directory or its parents. The separate `seccy secrets` commands
+read those files for managed secrets; see [managed secrets](docs/secrets.md). Remove old `--config` arguments and fnox
 `options.config` settings, then run `seccy fnox init` to update the plugin.
 Reinstall the login service after changing `XDG_CONFIG_HOME` so it captures the
 resolved location.

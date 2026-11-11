@@ -57,6 +57,7 @@ pub enum KeyStatus {
 
 #[derive(Debug, Serialize)]
 pub struct KeyInfo {
+    pub secrets: bool,
     pub config: Option<String>,
     pub name: String,
     pub mode: Mode,
@@ -76,6 +77,7 @@ impl KeyInfo {
         };
         Ok(Self {
             config: None,
+            secrets: false,
             name: name.into(),
             mode,
             status: if identity.is_some() {

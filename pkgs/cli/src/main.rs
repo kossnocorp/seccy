@@ -13,6 +13,11 @@ mod gh;
 mod inventory;
 mod logging;
 mod output;
+mod secret_args;
+#[cfg(target_os = "macos")]
+mod secret_config;
+#[cfg(target_os = "macos")]
+mod secret_manager;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod secrets;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -55,6 +60,9 @@ struct App {
 
 #[derive(Subcommands)]
 enum Commands {
+    /// Manage multi-recipient secrets (macOS Secure Enclave)
+    #[usage(alias = "s")]
+    Secrets(secret_args::SecretsArgs),
     /// Print shell setup for PATH and SSH_AUTH_SOCK
     Activate(ActivateArgs),
     /// Initialize the Linux TPM/FIDO vault
@@ -307,6 +315,15 @@ fn run(app: App, output: &Output) -> Result<()> {
         return activate::run(args.shell_type.as_deref(), output);
     }
     logging::init()?;
+    if let Commands::Secrets(args) = app.command {
+        #[cfg(target_os = "macos")]
+        return secret_manager::run(args, output);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = args;
+            anyhow::bail!("managed secrets currently require macOS Secure Enclave");
+        }
+    }
     if let Commands::Fnox(args) = &app.command {
         return match args.command {
             FnoxCommand::Info(_) => fnox::info(output),
@@ -340,6 +357,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         }
     }
     let command = match &app.command {
+        Commands::Secrets(_) => unreachable!(),
         Commands::Activate(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),
@@ -385,6 +403,7 @@ fn run_platform(app: App, config: Config, output: &Output) -> Result<()> {
     let store = platform::Store;
     let paths = Paths::from_env()?;
     match app.command {
+        Commands::Secrets(_) => unreachable!(),
         Commands::Activate(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),

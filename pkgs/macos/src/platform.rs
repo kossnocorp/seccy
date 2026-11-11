@@ -157,8 +157,27 @@ impl SecureEnclave {
     }
 
     pub fn decrypt(&self, expected: &Identity, value: &str, caller: &Caller) -> Result<Vec<u8>> {
+        self.decrypt_secret(expected, value, caller, None)
+    }
+
+    /// Name is display context only; managed envelopes authenticate it separately.
+    pub fn decrypt_secret(
+        &self,
+        expected: &Identity,
+        value: &str,
+        caller: &Caller,
+        name: Option<&str>,
+    ) -> Result<Vec<u8>> {
         let ciphertext = decode_envelope(value, expected)?;
-        let details = expected.decrypt_description("ECIES P-256/SHA-256/AES-GCM", caller);
+        let details = if let Some(name) = name {
+            ensure!(
+                seccy_core::envelope::valid_name(name),
+                "invalid secret name"
+            );
+            expected.managed_secret_description(name, caller)
+        } else {
+            expected.decrypt_description("ECIES P-256/SHA-256/AES-GCM", caller)
+        };
         let context = authentication_context(expected.mode, &details);
         let key = lookup_with_context(&expected.name, expected.mode, as_cf_context(&context))?
             .context("key no longer exists")?;
@@ -197,6 +216,50 @@ fn encrypt_envelope(public: &SecKey, expected: &Identity, plaintext: &[u8]) -> R
         "{ENVELOPE_PREFIX}{}",
         STANDARD.encode(serde_json::to_vec(&envelope)?)
     ))
+}
+
+/// Encrypt to a distributed public recipient without querying any local private key.
+pub fn wrap_secret_key(recipient: &str, file_key: &[u8]) -> Result<String> {
+    use core_foundation::{
+        data::CFData, dictionary::CFDictionary, error::CFError, string::CFString,
+    };
+    use security_framework_sys::{
+        item::{
+            kSecAttrKeyClass, kSecAttrKeyClassPublic, kSecAttrKeyType,
+            kSecAttrKeyTypeECSECPrimeRandom,
+        },
+        key::SecKeyCreateWithData,
+    };
+    let point = seccy_core::envelope::point(recipient)?;
+    let expected = Identity::new("recipient", Mode::Prompt, &point)?;
+    // SAFETY: constant attribute strings and CF objects remain live across the call;
+    // the returned owned reference is wrapped exactly once.
+    let public = unsafe {
+        let attributes = CFDictionary::from_CFType_pairs(&[
+            (
+                CFString::wrap_under_get_rule(kSecAttrKeyType),
+                CFString::wrap_under_get_rule(kSecAttrKeyTypeECSECPrimeRandom),
+            ),
+            (
+                CFString::wrap_under_get_rule(kSecAttrKeyClass),
+                CFString::wrap_under_get_rule(kSecAttrKeyClassPublic),
+            ),
+        ]);
+        let data = CFData::from_buffer(&point);
+        let mut error = std::ptr::null_mut();
+        let key = SecKeyCreateWithData(
+            data.as_concrete_TypeRef(),
+            attributes.as_concrete_TypeRef(),
+            &mut error,
+        );
+        if !error.is_null() {
+            let _error = CFError::wrap_under_create_rule(error);
+            bail!("cannot import public recipient");
+        }
+        ensure!(!key.is_null(), "cannot import public recipient");
+        SecKey::wrap_under_create_rule(key)
+    };
+    encrypt_envelope(&public, &expected, file_key)
 }
 
 fn authentication_context(mode: Mode, details: &str) -> Option<Retained<LAContext>> {
@@ -543,6 +606,37 @@ mod tests {
         );
         let error = decode_envelope(&invalid, &identity).unwrap_err();
         assert!(!format!("{error:#}").contains("sensitive-untrusted-field"));
+    }
+
+    #[test]
+    fn public_only_multi_recipient_secrets_use_real_apple_ecies() {
+        use seccy_core::envelope;
+        let (a, ia) = test_key();
+        let (b, ib) = test_key();
+        let (_, outsider) = test_key();
+        let recipients = vec![
+            envelope::from_identity(&ia).unwrap(),
+            envelope::from_identity(&ib).unwrap(),
+        ];
+        for bytes in [
+            vec![],
+            vec![0, 255, 128, 10],
+            vec![42; envelope::MAX_SECRET],
+        ] {
+            let value = envelope::encrypt("TEST", &bytes, &recipients, wrap_secret_key).unwrap();
+            let e = envelope::Envelope::parse(&value, "TEST").unwrap();
+            e.matches(&recipients).unwrap();
+            for (private, identity) in [(&a, &ia), (&b, &ib)] {
+                let encrypted =
+                    decode_envelope(&e.wrapped[&identity.fingerprint], identity).unwrap();
+                let file_key = private
+                    .decrypt_data(ENCRYPTION_ALGORITHM, &encrypted)
+                    .unwrap();
+                assert_eq!(*e.decrypt(&file_key).unwrap(), bytes);
+            }
+            assert!(!e.wrapped.contains_key(&outsider.fingerprint));
+            assert!(e.matches(&recipients[..1]).is_err());
+        }
     }
 
     #[test]

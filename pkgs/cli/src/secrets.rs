@@ -126,6 +126,48 @@ pub fn serve(
             .find(|key| key.name == request.key)
             .context("key is not configured and provisioned in the agent")?;
         match request.operation.as_str() {
+            #[cfg(target_os = "macos")]
+            "decrypt-managed" => {
+                use seccy_core::{Mode, envelope::Envelope, state::State, storage::Paths};
+                use zeroize::Zeroizing;
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Managed {
+                    name: String,
+                    value: String,
+                }
+                let value = request.value.context("missing ciphertext")?;
+                let managed: Managed = serde_json::from_str(&value)
+                    .map_err(|_| anyhow::anyhow!("invalid managed secrets request"))?;
+                let state = State::load(&Paths::from_env()?)?;
+                ensure!(
+                    state.keys.get(&identity.name).is_some_and(|r| r.secrets)
+                        && identity.mode == Mode::Prompt,
+                    "key is not enrolled for managed secrets with prompt authorization"
+                );
+                let envelope = Envelope::parse(&managed.value, &managed.name)?;
+                let wrapped = envelope
+                    .wrapped
+                    .get(&identity.fingerprint)
+                    .context("key is not a recipient")?;
+                let caller = platform::caller(&stream)?;
+                ensure!(caller.pid == connected.pid, "socket peer changed");
+                if let (Some(before), Some(now)) = (&connected.process, &caller.process) {
+                    ensure!(
+                        before.start_time_unix_seconds == now.start_time_unix_seconds
+                            && before.start_time_microseconds == now.start_time_microseconds,
+                        "socket peer process changed"
+                    );
+                }
+                let file_key = Zeroizing::new(seccy_macos::SecureEnclave.decrypt_secret(
+                    identity,
+                    wrapped,
+                    &caller,
+                    Some(&managed.name),
+                )?);
+                let plaintext = envelope.decrypt(&file_key)?;
+                Ok(json!({"ok": true, "value_base64": STANDARD.encode(&*plaintext)}))
+            }
             "check" => {
                 ensure!(request.value.is_none(), "check does not accept a payload");
                 platform::Store.crypto_check(identity)?;

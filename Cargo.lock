@@ -965,18 +965,23 @@ dependencies = [
  "serde_json",
  "shell-words",
  "tempfile",
+ "toml",
+ "toml_edit",
  "tracing",
  "tracing-subscriber",
  "usage-rs",
+ "zeroize",
 ]
 
 [[package]]
 name = "seccy_core"
 version = "0.3.1"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "base64 0.22.1",
  "p256",
+ "rand_core",
  "serde",
  "serde_json",
  "sha2",
@@ -984,6 +989,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -1294,6 +1300,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml_edit"
+version = "0.23.10+spec-1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84c8b9f757e028cee9fa244aea147aab2a9ec09d5325a9b01e0a49730c2b5269"
+dependencies = [
+ "indexmap",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow 0.7.15",
+]
+
+[[package]]
 name = "toml_parser"
 version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1499,6 +1518,9 @@ name = "winnow"
 version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "winnow"

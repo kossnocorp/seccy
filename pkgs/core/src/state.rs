@@ -15,6 +15,9 @@ use std::{
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Record {
+    /// Explicit local consent to use this key for managed secrets.
+    #[serde(default)]
+    pub secrets: bool,
     pub mode: Mode,
     pub github: Option<crate::Github>,
     pub config: PathBuf,
@@ -84,6 +87,7 @@ impl State {
     pub fn overlay(&mut self, config: &Config, source: &Path) {
         for (name, key) in &config.keys {
             self.keys.entry(name.clone()).or_insert_with(|| Record {
+                secrets: false,
                 mode: key.mode,
                 github: key.github,
                 config: source.into(),
@@ -114,6 +118,7 @@ impl State {
         };
         let identity = self.identity(store, name)?;
         let mut info = KeyInfo::new(name, record.mode, identity.as_ref(), paths)?;
+        info.secrets = record.secrets;
         info.config = Some(display_path(&record.config));
         Ok(Some(info))
     }

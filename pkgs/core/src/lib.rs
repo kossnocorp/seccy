@@ -1,5 +1,6 @@
 //! Portable configuration, key-store interface, and OpenSSH agent protocol.
 pub mod agent;
+pub mod envelope;
 pub mod payload;
 pub mod process;
 mod prompt;
@@ -109,6 +110,15 @@ pub struct Identity {
 }
 
 impl Identity {
+    pub fn managed_secret_description(&self, name: &str, caller: &Caller) -> String {
+        caller.request(
+            "Approve this decryption request?",
+            &self.name,
+            &format!("to decrypt secret {name}"),
+            self.mode,
+        )
+    }
+
     pub fn sign_description(
         &self,
         _bytes: usize,
