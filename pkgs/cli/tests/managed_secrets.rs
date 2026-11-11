@@ -21,6 +21,7 @@ fn identity() -> Identity {
 fn cmd(dir: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_seccy"));
     c.current_dir(dir)
+        .env_remove("SECCY_IDENTITY")
         .env("HOME", dir)
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("XDG_STATE_HOME", dir.join("state"))
@@ -128,6 +129,44 @@ fn mock_agent(
         requests
     })
 }
+#[test]
+fn identity_flags_and_environment_precedence_are_strict() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let dir = dir.path();
+    initialize(dir);
+    set(dir, "TOKEN", b"secret");
+    let server = mock_agent(dir, vec![Ok(b"secret".to_vec()); 4]);
+    for args in [
+        vec!["s", "get", "TOKEN", "-i", "test-key"],
+        vec!["s", "-i", "test-key", "get", "TOKEN"],
+        vec!["s", "get", "TOKEN", "--identity", "test-key"],
+    ] {
+        let output = cmd(dir).args(args).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"secret");
+    }
+    let output = cmd(dir)
+        .env("SECCY_IDENTITY", "test-key")
+        .args(["s", "get", "TOKEN", "-i", "missing-key"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"secret");
+    assert_eq!(server.join().unwrap().len(), 4);
+    // Neither an unknown selection nor an empty environment value may fall back.
+    for selected in ["missing-key", "", " "] {
+        let output = cmd(dir)
+            .env("SECCY_IDENTITY", selected)
+            .args(["s", "get", "TOKEN", "-i", "test-key", "--json"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(body["ok"], false);
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("value_base64"));
+    }
+}
+
 #[test]
 fn public_only_set_list_query_and_binary_get() {
     let dir = tempfile::tempdir_in("/tmp").unwrap();

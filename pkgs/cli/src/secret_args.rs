@@ -9,8 +9,8 @@ pub struct SecretsArgs {
     /// Use only this secrets file
     #[usage(short = 's', long = "secrets", alias = "file", global)]
     pub file: Option<PathBuf>,
-    /// Local enrolled identity to use for decryption (otherwise match automatically)
-    #[usage(long, global)]
+    /// Key handle for decryption (SECCY_IDENTITY overrides this; otherwise match automatically)
+    #[usage(short = 'i', long, global)]
     pub identity: Option<String>,
     #[usage(subcommand)]
     pub command: SecretsCommand,

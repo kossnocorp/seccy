@@ -140,6 +140,21 @@ fn decrypt(name: &str, secret: &Secret, selected: Option<&str>) -> Result<Zeroiz
     Ok(result)
 }
 pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
+    // Resolve the logical key handle once, independently of the storage backend.
+    // An explicit selection must never fall back to another identity.
+    match std::env::var("SECCY_IDENTITY") {
+        Ok(identity) => args.identity = Some(identity),
+        Err(std::env::VarError::NotPresent) => (),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("SECCY_IDENTITY must contain a valid UTF-8 key handle")
+        }
+    }
+    if let Some(identity) = &args.identity {
+        ensure!(
+            !identity.trim().is_empty(),
+            "identity key handle must not be empty"
+        );
+    }
     let paths = Paths::from_env()?;
     let global = paths.config.with_file_name("secrets.toml");
     let cwd = std::env::current_dir()?;

@@ -139,8 +139,22 @@ fingerprint and does not restore access to existing ciphertext.
 
 Decryption automatically selects a registered, explicitly enrolled prompt key
 whose fingerprint occurs in the envelope. If several match, selection is
-lexicographic by local key name; use `--identity KEY` to choose another. Cancellation
+lexicographic by local key name; use `-i KEY` / `--identity KEY` to choose another. Cancellation
 or failure does not silently try other identities or weaker policies.
+
+`SECCY_IDENTITY` takes precedence over `-i` / `--identity`. The value is the logical
+key handle from `[keys.<handle>]` (for example `auth2`), not a recipient alias,
+fingerprint, or hardware credential ID. Selection applies to decryption in `get`,
+`exec`, and `reencrypt`; it does not change encryption recipients or the key passed
+to `enroll`. An empty environment value is an error; unset it to restore flag or
+automatic selection. Currently the selected key must already be enrolled for
+secrets on this machine.
+
+```sh
+seccy s get SECRET_VAR -i auth2
+seccy s -i auth2 get SECRET_VAR
+SECCY_IDENTITY=auth2 seccy s get SECRET_VAR
+```
 
 ## Output and execution
 
