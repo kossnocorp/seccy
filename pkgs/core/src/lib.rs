@@ -111,8 +111,13 @@ pub struct Identity {
 
 impl Identity {
     pub fn managed_secret_description(&self, name: &str, caller: &Caller) -> String {
+        let name = prompt::value(name);
+        let heading = match self.mode {
+            Mode::Prompt => format!("Decrypt secret {name}?"),
+            Mode::Notify => format!("Secret {name} decrypted."),
+        };
         caller.request(
-            "Approve this decryption request?",
+            &heading,
             &self.name,
             &format!("to decrypt secret {name}"),
             self.mode,
@@ -131,7 +136,7 @@ impl Identity {
     pub fn decrypt_description(&self, _algorithm: &str, caller: &Caller) -> String {
         caller.request(
             match self.mode {
-                Mode::Prompt => "Approve this decryption request?",
+                Mode::Prompt => "Decrypt a secret?",
                 Mode::Notify => "Secret decrypted.",
             },
             &self.name,

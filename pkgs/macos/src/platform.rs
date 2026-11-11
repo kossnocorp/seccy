@@ -194,7 +194,7 @@ impl SecureEnclave {
             "decrypted secret exceeds 64 KiB"
         );
         if expected.mode == Mode::Notify {
-            notify(&details)?;
+            notify("seccy: secret decrypted", &details)?;
             tracing::info!(event = "notification_submitted");
         }
         tracing::info!(event = "secret_decrypted", key = %expected.name);
@@ -379,17 +379,17 @@ impl KeyStore for SecureEnclave {
             .create_signature(Algorithm::ECDSASignatureMessageX962SHA256, message)
             .map_err(|e| anyhow!("Secure Enclave signing failed: {e}"))?;
         if expected.mode == Mode::Notify {
-            notify(&details)?;
+            notify("seccy: key used", &details)?;
             tracing::info!(event = "notification_submitted");
         }
         Ok(signature)
     }
 }
 
-fn notify(message: &str) -> Result<()> {
+fn notify(title: &str, message: &str) -> Result<()> {
     // Pass untrusted text as argv, never interpolate it into AppleScript source.
     let output = Command::new("/usr/bin/osascript")
-        .args(["-e", "on run argv\ndisplay notification (item 1 of argv) with title \"seccy: key used\"\nend run", "--", message])
+        .args(["-e", "on run argv\ndisplay notification (item 1 of argv) with title (item 2 of argv)\nend run", "--", message, title])
         .output().context("send key-use notification")?;
     ensure!(
         output.status.success(),

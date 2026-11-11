@@ -150,6 +150,12 @@ to `enroll`. An empty environment value is an error; unset it to restore flag or
 automatic selection. Currently the selected key must already be enrolled for
 secrets on this machine.
 
+The authorization prompt says `Decrypt secret SECRET_VAR?` and identifies the key
+and requesting process chain. It never displays the secret value. Signing and SSH
+authentication retain their own operation-specific prompts. Legacy decryption in
+notify mode uses the notification title `seccy: secret decrypted` and completed-action
+wording; managed secrets still require prompt authorization.
+
 ```sh
 seccy s get SECRET_VAR -i auth2
 seccy s -i auth2 get SECRET_VAR
