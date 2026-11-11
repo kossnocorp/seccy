@@ -5,9 +5,11 @@ use seccy_core::storage::Paths;
 use serde_json::json;
 use std::{
     fs,
+    io::Write,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output as ProcessOutput},
+    time::Duration,
 };
 
 const LABEL: &str = "fyi.seccy.agent";
@@ -19,14 +21,99 @@ fn launchctl(args: &[&str]) -> Result<std::process::Output> {
         .context("run launchctl")
 }
 
-fn checked(args: &[&str]) -> Result<()> {
-    let output = launchctl(args)?;
+fn check_output(args: &[&str], output: ProcessOutput) -> Result<()> {
     ensure!(
         output.status.success(),
         "launchctl {}: {}",
         args.join(" "),
         String::from_utf8_lossy(&output.stderr).trim()
     );
+    Ok(())
+}
+
+fn checked(args: &[&str]) -> Result<()> {
+    check_output(args, launchctl(args)?)
+}
+
+fn write_definition(file: &Path, bytes: &[u8]) -> Result<()> {
+    let mut temporary = tempfile::NamedTempFile::new_in(file.parent().context("plist directory")?)?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(file)?;
+    Ok(())
+}
+
+// launchd can still be tearing down a booted-out job when bootstrap returns EIO.
+// Retry that error only, with a bound; retain the final launchctl diagnostic.
+fn bootstrap(
+    domain: &str,
+    file: &Path,
+    run: &mut impl FnMut(&[&str]) -> Result<ProcessOutput>,
+    wait: &mut impl FnMut(),
+) -> Result<()> {
+    let args = ["bootstrap", domain, text(file)?];
+    for attempt in 0..10 {
+        let output = run(&args)?;
+        if output.status.code() != Some(5) || attempt == 9 {
+            return check_output(&args, output);
+        }
+        wait();
+    }
+    unreachable!()
+}
+
+fn install_definition(
+    file: &Path,
+    desired: &plist::Value,
+    domain: &str,
+    target: &str,
+    run: &mut impl FnMut(&[&str]) -> Result<ProcessOutput>,
+    wait: &mut impl FnMut(),
+) -> Result<()> {
+    let previous = match fs::read(file) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let unchanged = previous.as_ref().is_some_and(|bytes| {
+        plist::Value::from_reader(std::io::Cursor::new(bytes)).is_ok_and(|value| value == *desired)
+    });
+    let loaded = run(&["print", target])?.status.success();
+    check_output(&["enable", target], run(&["enable", target])?)?;
+    if loaded && unchanged {
+        // Refresh the executable/config without unregistering a working service.
+        return check_output(
+            &["kickstart", "-k", target],
+            run(&["kickstart", "-k", target])?,
+        );
+    }
+    let mut bytes = Vec::new();
+    desired.to_writer_xml(&mut bytes)?;
+    write_definition(file, &bytes)?;
+    let result = (|| {
+        if loaded {
+            check_output(&["bootout", target], run(&["bootout", target])?)?;
+        }
+        bootstrap(domain, file, run, wait)
+    })();
+    if let Err(error) = result {
+        if let Some(previous) = previous {
+            let rollback = (|| -> Result<()> {
+                write_definition(file, &previous)?;
+                if loaded && !run(&["print", target])?.status.success() {
+                    bootstrap(domain, file, run, wait)?;
+                }
+                Ok(())
+            })();
+            return match rollback {
+                Ok(()) => Err(error.context("service update failed; previous definition restored")),
+                Err(rollback) => Err(error.context(format!(
+                    "service update failed; restoring the previous service also failed: {rollback:#}"
+                ))),
+            };
+        }
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -111,15 +198,15 @@ pub fn run(command: ServiceCommand, paths: &Paths, output: &crate::Output) -> Re
                     .open(paths.state.join("logs").join(name))?;
             }
             fs::create_dir_all(&directory)?;
-            let temporary = tempfile::NamedTempFile::new_in(&directory)?;
-            definition(&executable, &home, paths)?.to_writer_xml(temporary.as_file())?;
-            temporary.as_file().sync_all()?;
-            temporary.persist(&file)?;
-            if launchctl(&["print", &target])?.status.success() {
-                checked(&["bootout", &target])?;
-            }
-            checked(&["enable", &target])?;
-            checked(&["bootstrap", &domain, text(&file)?])?;
+            let _install_lock = server::lock(&paths.state.join("service-install.lock"))?;
+            install_definition(
+                &file,
+                &definition(&executable, &home, paths)?,
+                &domain,
+                &target,
+                &mut launchctl,
+                &mut || std::thread::sleep(Duration::from_millis(250)),
+            )?;
             emit(
                 output,
                 json!({"ok": true, "service": LABEL, "plist": file}),
@@ -188,5 +275,137 @@ mod tests {
             Some("/Users/test/.config")
         );
         assert!(!env.contains_key("LOG_LEVEL"));
+    }
+
+    fn sample_definition(program: &str) -> plist::Value {
+        let mut dict = plist::Dictionary::new();
+        dict.insert("Label".into(), LABEL.into());
+        dict.insert("Program".into(), program.into());
+        dict.into()
+    }
+
+    fn fake_launchctl(
+        expected: Vec<(&'static str, i32)>,
+    ) -> impl FnMut(&[&str]) -> Result<ProcessOutput> {
+        use std::os::unix::process::ExitStatusExt;
+        let mut expected = expected.into_iter();
+        move |args| {
+            let (command, code) = expected.next().expect("unexpected launchctl invocation");
+            assert_eq!(args[0], command);
+            Ok(ProcessOutput {
+                status: std::process::ExitStatus::from_raw(code << 8),
+                stdout: Vec::new(),
+                stderr: b"simulated launchctl failure".to_vec(),
+            })
+        }
+    }
+
+    #[test]
+    fn repeated_install_keeps_job_registered() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("agent.plist");
+        let desired = sample_definition("/app/seccy");
+        desired.to_file_xml(&file).unwrap();
+        let original = fs::read(&file).unwrap();
+        for _ in 0..2 {
+            let mut calls = Vec::new();
+            let mut run = |args: &[&str]| {
+                calls.push(args.join(" "));
+                use std::os::unix::process::ExitStatusExt;
+                Ok(ProcessOutput {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            };
+            install_definition(
+                &file,
+                &desired,
+                "gui/501",
+                "gui/501/fyi.seccy.agent",
+                &mut run,
+                &mut || panic!("unexpected retry"),
+            )
+            .unwrap();
+            assert_eq!(
+                calls,
+                [
+                    "print gui/501/fyi.seccy.agent",
+                    "enable gui/501/fyi.seccy.agent",
+                    "kickstart -k gui/501/fyi.seccy.agent"
+                ]
+            );
+            assert_eq!(fs::read(&file).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn missing_job_is_bootstrapped_even_with_unchanged_plist() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("agent.plist");
+        let desired = sample_definition("/app/seccy");
+        desired.to_file_xml(&file).unwrap();
+        let mut run = fake_launchctl(vec![("print", 113), ("enable", 0), ("bootstrap", 0)]);
+        install_definition(
+            &file,
+            &desired,
+            "gui/501",
+            "gui/501/fyi.seccy.agent",
+            &mut run,
+            &mut || panic!("unexpected retry"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn changed_job_retries_transient_bootstrap_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("agent.plist");
+        sample_definition("/old/seccy").to_file_xml(&file).unwrap();
+        let desired = sample_definition("/new/seccy");
+        let mut run = fake_launchctl(vec![
+            ("print", 0),
+            ("enable", 0),
+            ("bootout", 0),
+            ("bootstrap", 5),
+            ("bootstrap", 0),
+        ]);
+        let mut waits = 0;
+        install_definition(
+            &file,
+            &desired,
+            "gui/501",
+            "gui/501/fyi.seccy.agent",
+            &mut run,
+            &mut || waits += 1,
+        )
+        .unwrap();
+        assert_eq!(waits, 1);
+        assert_eq!(plist::Value::from_file(&file).unwrap(), desired);
+    }
+
+    #[test]
+    fn exhausted_reload_restores_previous_service() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("agent.plist");
+        let previous = sample_definition("/old/seccy");
+        previous.to_file_xml(&file).unwrap();
+        let mut expected = vec![("print", 0), ("enable", 0), ("bootout", 0)];
+        expected.extend(std::iter::repeat_n(("bootstrap", 5), 10));
+        expected.extend([("print", 113), ("bootstrap", 0)]);
+        let mut run = fake_launchctl(expected);
+        let mut waits = 0;
+        let error = install_definition(
+            &file,
+            &sample_definition("/new/seccy"),
+            "gui/501",
+            "gui/501/fyi.seccy.agent",
+            &mut run,
+            &mut || waits += 1,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("previous definition restored"));
+        assert_eq!(waits, 9);
+        assert_eq!(plist::Value::from_file(&file).unwrap(), previous);
     }
 }
