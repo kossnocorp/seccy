@@ -168,6 +168,68 @@ pub fn serve(
                 let plaintext = envelope.decrypt(&file_key)?;
                 Ok(json!({"ok": true, "value_base64": STANDARD.encode(&*plaintext)}))
             }
+            #[cfg(target_os = "macos")]
+            "decrypt-managed-batch" => {
+                use seccy_core::{Mode, envelope::Envelope, state::State, storage::Paths};
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Entry {
+                    key: String,
+                    name: String,
+                    value: String,
+                }
+                let entries: Vec<Entry> =
+                    serde_json::from_str(&request.value.context("missing ciphertext")?)
+                        .map_err(|_| anyhow::anyhow!("invalid managed secrets batch"))?;
+                ensure!(!entries.is_empty(), "empty managed secrets batch");
+                let state = State::load(&Paths::from_env()?)?;
+                let mut names = std::collections::BTreeSet::new();
+                let mut prepared = Vec::new();
+                for entry in &entries {
+                    ensure!(names.insert(&entry.name), "duplicate secret name");
+                    let identity = keys
+                        .iter()
+                        .find(|key| key.name == entry.key)
+                        .context("key is not configured and provisioned in the agent")?;
+                    ensure!(
+                        state.keys.get(&identity.name).is_some_and(|r| r.secrets)
+                            && identity.mode == Mode::Prompt,
+                        "key is not enrolled for managed secrets with prompt authorization"
+                    );
+                    let envelope = Envelope::parse(&entry.value, &entry.name)?;
+                    ensure!(
+                        envelope.wrapped.contains_key(&identity.fingerprint),
+                        "key is not a recipient"
+                    );
+                    prepared.push((identity, envelope));
+                }
+                let caller = platform::caller(&stream)?;
+                ensure!(caller.pid == connected.pid, "socket peer changed");
+                if let (Some(before), Some(now)) = (&connected.process, &caller.process) {
+                    ensure!(
+                        before.start_time_unix_seconds == now.start_time_unix_seconds
+                            && before.start_time_microseconds == now.start_time_microseconds,
+                        "socket peer process changed"
+                    );
+                }
+                let items: Vec<_> = prepared
+                    .iter()
+                    .zip(&entries)
+                    .map(|((identity, envelope), entry)| {
+                        (
+                            *identity,
+                            envelope.wrapped[&identity.fingerprint].as_str(),
+                            entry.name.as_str(),
+                        )
+                    })
+                    .collect();
+                let file_keys = seccy_macos::SecureEnclave.decrypt_secrets(&items, &caller)?;
+                let mut values = zeroize::Zeroizing::new(Vec::<String>::new());
+                for ((_, envelope), key) in prepared.iter().zip(file_keys) {
+                    values.push(STANDARD.encode(&*envelope.decrypt(&key)?));
+                }
+                Ok(json!({"ok": true, "values_base64": &*values}))
+            }
             "check" => {
                 ensure!(request.value.is_none(), "check does not accept a payload");
                 platform::Store.crypto_check(identity)?;

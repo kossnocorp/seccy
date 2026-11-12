@@ -160,6 +160,58 @@ impl SecureEnclave {
         self.decrypt_secret(expected, value, caller, None)
     }
 
+    /// Share authorization only within this explicitly named batch, never across requests.
+    pub fn decrypt_secrets(
+        &self,
+        items: &[(&Identity, &str, &str)],
+        caller: &Caller,
+    ) -> Result<Vec<zeroize::Zeroizing<Vec<u8>>>> {
+        ensure!(!items.is_empty(), "empty secrets batch");
+        let mut ciphertexts = Vec::new();
+        for (identity, value, name) in items {
+            ensure!(identity.mode == Mode::Prompt, "batch requires prompt keys");
+            ensure!(
+                seccy_core::envelope::valid_name(name),
+                "invalid secret name"
+            );
+            ciphertexts.push(decode_envelope(value, identity)?);
+        }
+        let details = caller.managed_secrets_description(
+            &items.iter().map(|(_, _, name)| *name).collect::<Vec<_>>(),
+            &items
+                .iter()
+                .map(|(key, _, _)| key.name.as_str())
+                .collect::<Vec<_>>(),
+        );
+        let context = authentication_context(Mode::Prompt, &details);
+        let result = (|| {
+            let mut plaintexts = Vec::new();
+            for ((expected, _, _), ciphertext) in items.iter().zip(ciphertexts) {
+                let key =
+                    lookup_with_context(&expected.name, expected.mode, as_cf_context(&context))?
+                        .context("key no longer exists")?;
+                ensure!(
+                    identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
+                    "key changed; restart agent"
+                );
+                let plaintext = zeroize::Zeroizing::new(key.decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
+                    .map_err(|_| anyhow!("decryption failed: authorization cancelled or unavailable, invalidated key, or damaged ciphertext"))?);
+                ensure!(
+                    plaintext.len() <= MAX_SECRET_BYTES,
+                    "decrypted secret exceeds 64 KiB"
+                );
+                plaintexts.push(plaintext);
+            }
+            Ok(plaintexts)
+        })();
+        if let Some(context) = context {
+            unsafe {
+                context.invalidate();
+            }
+        }
+        result
+    }
+
     /// Name is display context only; managed envelopes authenticate it separately.
     pub fn decrypt_secret(
         &self,
@@ -266,7 +318,7 @@ fn authentication_context(mode: Mode, details: &str) -> Option<Retained<LAContex
     if mode != Mode::Prompt {
         return None;
     }
-    // SAFETY: this context is confined to one private-key operation.
+    // SAFETY: this context is confined to one request (a single operation or explicit batch).
     let context = unsafe { LAContext::new() };
     unsafe {
         context.setLocalizedReason(&NSString::from_str(details));

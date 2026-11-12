@@ -92,7 +92,8 @@ fn mock_agent(
     listener.set_nonblocking(true).unwrap();
     std::thread::spawn(move || {
         let mut requests = Vec::new();
-        for response in responses {
+        let mut responses = responses.into_iter();
+        while let Some(response) = responses.next() {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let mut stream = loop {
                 match listener.accept() {
@@ -115,13 +116,28 @@ fn mock_agent(
                 &seccy_core::agent::read_frame(&mut stream).unwrap().unwrap(),
             )
             .unwrap();
-            assert_eq!(request["operation"], "decrypt-managed");
             assert_eq!(request["key"], "test-key");
-            requests.push(request);
-            let response = match response {
-                Ok(bytes) => json!({"ok":true,"value_base64":B64.encode(bytes)}),
-                Err(error) => json!({"ok":false,"error":error}),
+            let response = if request["operation"] == "decrypt-managed-batch" {
+                let entries: Vec<Value> =
+                    serde_json::from_str(request["value"].as_str().unwrap()).unwrap();
+                let mut batch = vec![response];
+                for _ in 1..entries.len() {
+                    batch.push(responses.next().expect("missing batch response"));
+                }
+                match batch.into_iter().collect::<Result<Vec<_>, _>>() {
+                    Ok(values) => {
+                        json!({"ok":true,"values_base64":values.into_iter().map(|v| B64.encode(v)).collect::<Vec<_>>()})
+                    }
+                    Err(error) => json!({"ok":false,"error":error}),
+                }
+            } else {
+                assert_eq!(request["operation"], "decrypt-managed");
+                match response {
+                    Ok(bytes) => json!({"ok":true,"value_base64":B64.encode(bytes)}),
+                    Err(error) => json!({"ok":false,"error":error}),
+                }
             };
+            requests.push(request);
             seccy_core::agent::write_frame(&mut stream, &serde_json::to_vec(&response).unwrap())
                 .unwrap();
         }
@@ -218,7 +234,7 @@ fn exec_selection_all_arguments_exit_status_and_auth_failure() {
     let out = cmd(dir)
         .args([
             "s",
-            "exec",
+            "x",
             "FIRST",
             "--",
             "/bin/sh",
@@ -243,22 +259,32 @@ fn exec_selection_all_arguments_exit_status_and_auth_failure() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{out:?}");
-    server.join().unwrap();
-    let server = mock_agent(dir, vec![Err("cancelled")]);
-    let out = cmd(dir)
-        .args([
-            "s",
-            "exec",
-            "FIRST",
-            "--",
-            "/usr/bin/touch",
-            "SHOULD_NOT_EXIST",
-        ])
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    assert!(!dir.join("SHOULD_NOT_EXIST").exists());
-    server.join().unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 1, "exec must use one authorization request");
+    let entries: Value = serde_json::from_str(requests[0]["value"].as_str().unwrap()).unwrap();
+    assert_eq!(entries[0]["name"], "FIRST");
+    assert_eq!(entries[1]["name"], "SECOND");
+    for responses in [
+        vec![Ok(b"a".to_vec()), Err("cancelled")],
+        vec![Ok(b"a".to_vec()), Ok(b"invalid\0value".to_vec())],
+    ] {
+        let server = mock_agent(dir, responses);
+        let out = cmd(dir)
+            .args([
+                "s",
+                "x",
+                "FIRST",
+                "SECOND",
+                "--",
+                "/usr/bin/touch",
+                "SHOULD_NOT_EXIST",
+            ])
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        assert!(!dir.join("SHOULD_NOT_EXIST").exists());
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
 }
 #[test]
 fn reencrypt_failure_is_atomic_and_success_updates_recipients() {

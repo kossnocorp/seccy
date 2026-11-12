@@ -171,6 +171,7 @@ seccy s recipients list --jq '.recipients[] | {name, fingerprint}'
 seccy s get TOKEN --json
 seccy s get TOKEN --jq-raw '.value_base64'
 seccy s exec FIRST SECOND -- command --its-flags
+seccy s x FIRST SECOND -- command --its-flags
 seccy s exec -- command
 ```
 
@@ -178,8 +179,13 @@ seccy s exec -- command
 uses `value_base64`, matching legacy `decrypt`; listing/mutation output never
 includes plaintext. `--jq`, `--jq-raw` and `--jq-exit-status` work as usual.
 
-`exec` decrypts the selected secrets, or all effective secrets if no names are
-provided, and adds them to the child's inherited environment. It starts no child
+`exec` (alias `x`) decrypts the selected secrets, or all effective secrets if no names are
+provided, and adds them to the child's inherited environment. On macOS, one
+batch request uses a single Touch ID authorization context with the selected
+secret names in the prompt. The context is invalidated after the batch; a later
+invocation requires fresh authorization. Restart the agent after upgrading to
+use the batch protocol. Batches must fit the agent's 256 KiB request/response
+frame limit. It starts no child
 if authorization fails. NUL bytes cannot be represented in environment variables
 and are rejected; other bytes are preserved on Unix. The child receives normal
 stdin/stdout/stderr and its exit status/signals are preserved. `exec` does not

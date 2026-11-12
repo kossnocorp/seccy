@@ -139,6 +139,53 @@ fn decrypt(name: &str, secret: &Secret, selected: Option<&str>) -> Result<Zeroiz
     }
     Ok(result)
 }
+fn decrypt_batch(
+    names: &[String],
+    config: &Config,
+    selected: Option<&str>,
+) -> Result<Vec<Zeroizing<Vec<u8>>>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let paths = Paths::from_env()?;
+    let lock = crate::inventory::read_lock(&paths)?;
+    let state = State::load(&paths)?;
+    let mut entries = Vec::new();
+    for name in names {
+        let secret = &config.secrets[name];
+        let envelope = envelope::Envelope::parse(&secret.value, name)?;
+        let identity = state.keys.iter().find(|(key, record)| record.secrets && record.mode == Mode::Prompt
+            && selected.is_none_or(|s| s == key.as_str())
+            && record.fingerprint.as_ref().is_some_and(|f| envelope.wrapped.contains_key(f)))
+            .map(|(name,_)| name).context("no enrolled local prompt key matches this secret; enroll a matching key or select --identity")?;
+        entries.push(json!({"key": identity, "name": name, "value": secret.value}));
+    }
+    drop(lock);
+    let mut response = crate::secrets::request(
+        None,
+        "decrypt-managed-batch",
+        entries[0]["key"].as_str().unwrap(),
+        Some(serde_json::to_string(&entries)?),
+    )?;
+    let values = response["values_base64"]
+        .as_array_mut()
+        .context("invalid batch decryption response")?;
+    ensure!(
+        values.len() == names.len(),
+        "invalid batch decryption response"
+    );
+    let mut result = Vec::new();
+    for value in values.iter_mut() {
+        let encoded = value
+            .as_str()
+            .context("invalid batch decryption response")?;
+        result.push(Zeroizing::new(B64.decode(encoded)?));
+        if let serde_json::Value::String(s) = value {
+            zeroize::Zeroize::zeroize(s);
+        }
+    }
+    Ok(result)
+}
 pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
     // Resolve the logical key handle once, independently of the storage backend.
     // An explicit selection must never fall back to another identity.
@@ -323,8 +370,8 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
             }
             let mut child = Command::new(&command[0]);
             child.args(&command[1..]);
-            for name in &names {
-                let bytes = decrypt(name, &config.secrets[name], args.identity.as_deref())?;
+            let values = decrypt_batch(&names, &config, args.identity.as_deref())?;
+            for (name, bytes) in names.iter().zip(values) {
                 ensure!(
                     !bytes.contains(&0),
                     "secret {name} contains NUL and cannot be an environment value"

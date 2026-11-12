@@ -24,6 +24,7 @@ pub enum SecretsCommand {
     /// Decrypt a secret to stdout; JSON uses value_base64
     Get(NameArgs),
     /// Execute a command with secrets in its environment; use -- before command
+    #[usage(alias = "x")]
     Exec(ExecArgs),
     /// Enroll an existing prompt key for managed secrets and add its public recipient
     Enroll(EnrollArgs),

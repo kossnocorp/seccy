@@ -18,6 +18,20 @@ pub(crate) fn value(text: &str) -> String {
 }
 
 impl Caller {
+    pub fn managed_secrets_description(&self, names: &[&str], keys: &[&str]) -> String {
+        let names = names
+            .iter()
+            .map(|name| value(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.request(
+            &format!("Decrypt secrets {names}?"),
+            &keys.join(", "),
+            &format!("to decrypt secrets {names}"),
+            Mode::Prompt,
+        )
+    }
+
     pub fn summary(&self) -> String {
         let processes = || self.process.iter().chain(&self.ancestors);
         let chain: Vec<_> = processes().collect();
