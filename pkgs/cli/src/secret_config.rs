@@ -37,6 +37,46 @@ pub struct Config {
     pub sources: Vec<Source>,
     pub target: PathBuf,
 }
+/// Lock the destination path across atomic replacement, including its first creation.
+/// Canonicalize only the parent: saving rejects symlink destinations, and the
+/// destination itself may not exist yet. Hash raw path bytes without lossy UTF-8.
+pub fn writer_lock(state: &Path, target: &Path) -> Result<fs::File> {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::{
+        ffi::OsStrExt,
+        fs::{MetadataExt, OpenOptionsExt},
+    };
+    let absolute = std::path::absolute(target)?;
+    let canonical = absolute
+        .parent()
+        .context("invalid secrets path")?
+        .canonicalize()
+        .context("resolve secrets directory")?
+        .join(absolute.file_name().context("invalid secrets filename")?);
+    let digest = Sha256::digest(canonical.as_os_str().as_bytes());
+    crate::server::private_dir(state)?;
+    let directory = state.join("secrets-locks");
+    crate::server::private_dir(&directory)?;
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(directory.join(format!("{digest:x}.lock")))?;
+    let metadata = lock.metadata()?;
+    ensure!(
+        metadata.is_file()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o077 == 0,
+        "secrets lock must be an owned private regular file"
+    );
+    fs2::FileExt::try_lock_exclusive(&lock)
+        .context("another Seccy process is updating this secrets file")?;
+    Ok(lock)
+}
+
 fn read(path: &Path) -> Result<Option<String>> {
     use std::os::unix::fs::OpenOptionsExt;
     // Opening a malicious FIFO must not block before the regular-file check.
@@ -300,6 +340,34 @@ pub fn valid_id(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn writer_lock_survives_creation_replacement_and_directory_aliases() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let project = dir.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&project, &alias).unwrap();
+        let target = project.join("seccy.toml");
+        let lock = writer_lock(&state, &target).unwrap();
+        assert!(writer_lock(&state, &alias.join("seccy.toml")).is_err());
+        fs::write(&target, "").unwrap();
+        assert!(writer_lock(&state, &target).is_err());
+        let replacement = project.join("replacement");
+        fs::write(&replacement, "# replacement").unwrap();
+        fs::rename(replacement, &target).unwrap();
+        assert!(writer_lock(&state, &project.join("../project/seccy.toml")).is_err());
+        let other = writer_lock(&state, &project.join("other.toml")).unwrap();
+        assert_eq!(fs::read_dir(&project).unwrap().count(), 1);
+        assert_eq!(
+            fs::read_dir(state.join("secrets-locks")).unwrap().count(),
+            2
+        );
+        drop(lock);
+        writer_lock(&state, &alias.join("seccy.toml")).unwrap();
+        drop(other);
+    }
+
     fn recipient() -> String {
         let hex = "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5";
         envelope::recipient(

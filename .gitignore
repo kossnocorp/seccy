@@ -13,6 +13,3 @@ pkgs/website/.wrangler/
 pkgs/website/dist/
 pkgs/website/worker-configuration.d.ts
 pkgs/website/public/install.sh
-
-# Managed secrets writer locks (ciphertext files may be committed)
-seccy.toml.lock

@@ -97,9 +97,17 @@ secret are copied into that file, keeping it portable.
 The files contain public metadata and ciphertext. They can be version-controlled,
 but secret names and recipients are visible. Writes use a private temporary file
 in the same directory, fsync and atomic replacement; the resulting mode is 0600.
-Concurrent Seccy writers lock `<file>.lock`, and detected external edits abort a
-write. Symlinks and foreign-owned or group/world-writable destination files are
-not replaced. Add `seccy.toml.lock` to repository ignore rules. Configuration files
+Concurrent Seccy writers use private lock files in
+`$XDG_STATE_HOME/seccy/secrets-locks/` (default
+`~/.local/state/seccy/secrets-locks/`). Each filename is a SHA-256 hash of the
+canonical parent directory plus the secrets filename, so directory aliases share
+a lock even before the secrets file exists. Writers must use the same state
+directory to coordinate. No lock files are created in the project directory.
+The lock files are intentionally empty: the OS tracks the advisory lock and
+releases it when the command exits, including after a crash. Files remain in
+place to avoid races; their presence does not mean a writer holds a lock.
+Detected external edits abort a write. Symlinks and foreign-owned or
+group/world-writable destination files are not replaced. Configuration files
 are trusted inputs: review project secrets files before executing commands with
 secrets. This format has only `[recipients]` and `[secrets]`; provisioning keys
 still belongs in the global `config.toml`.

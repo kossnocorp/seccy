@@ -246,24 +246,7 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
         if config.target == global {
             crate::server::private_dir(parent)?;
         }
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(config.target.with_extension("toml.lock"))?;
-        use std::os::unix::fs::MetadataExt;
-        let metadata = lock.metadata()?;
-        ensure!(
-            metadata.is_file()
-                && metadata.uid() == unsafe { libc::geteuid() }
-                && metadata.mode() & 0o077 == 0,
-            "secrets lock must be an owned private regular file"
-        );
-        fs2::FileExt::try_lock_exclusive(&lock)
-            .context("another Seccy process is updating this secrets file")?;
+        let lock = crate::secret_config::writer_lock(&paths.state, &config.target)?;
         // Reload after locking so concurrent Seccy writers cannot overwrite each other.
         config = Config::load(&global, &cwd, args.file.as_deref(), args.global)?;
         Some(lock)
