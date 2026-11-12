@@ -13,3 +13,5 @@ pkgs/website/.wrangler/
 pkgs/website/dist/
 pkgs/website/worker-configuration.d.ts
 pkgs/website/public/install.sh
+# Managed by VS Code Orchardist extension:
+seccy.wt.code-workspace
