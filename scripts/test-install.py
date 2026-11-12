@@ -228,6 +228,60 @@ fi
                 self.assertEqual(marker.read_text(), "preserve")
                 self.assertTrue((self.home / ".local/bin/seccy").is_file())
 
+    def macos_service_fixture(self):
+        app = self.macos_fixture()
+        executable = app / "Contents/MacOS/seccy"
+        executable.write_text(executable.read_text().replace(
+            '"fnox init") ;;',
+            '''"service install")
+    printf '%s\\n' "$0" >> "$HOME/service-calls"
+    "$0" --version >> "$HOME/service-calls"
+    test "${FAIL_SERVICE:-}" != 1 ;;
+"fnox init") ;;'''))
+        plist = self.home / "Library/LaunchAgents/fyi.seccy.agent.plist"
+        plist.parent.mkdir(parents=True)
+        plist.write_text("existing service definition")
+        return executable
+
+    def test_macos_updates_refresh_existing_service_from_permanent_bundle(self):
+        source = self.macos_service_fixture()
+        template = source.read_text()
+        calls = self.home / "service-calls"
+        installed = self.home / ".local/share/seccy/Seccy.app/Contents/MacOS/seccy"
+        for version in ("0.1.0", "0.2.0", "0.3.0"):
+            with self.subTest(version=version):
+                source.write_text(template.replace("0.1.0", version))
+                result = self.run_install("--archive", str(self.archive))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(calls.read_text().splitlines()[-2:],
+                                 [str(installed), f"seccy {version}"])
+        self.assertEqual(len(calls.read_text().splitlines()), 6)
+
+    def test_macos_same_version_repairs_service_without_replacing_bundle(self):
+        self.macos_service_fixture()
+        result = self.run_install("--archive", str(self.archive))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installed = self.home / ".local/share/seccy/Seccy.app/Contents/MacOS/seccy"
+        before = installed.stat().st_mtime_ns
+        self.command("curl", "exit 99")
+        for args in (("--archive", str(self.archive)), ("--version", "cli@0.1.0")):
+            result = self.run_install(*args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("already installed", result.stdout)
+            self.assertEqual(installed.stat().st_mtime_ns, before)
+        self.assertEqual(len((self.home / "service-calls").read_text().splitlines()), 6)
+
+    def test_macos_service_failure_is_reported_and_can_be_retried(self):
+        self.macos_service_fixture()
+        self.env["FAIL_SERVICE"] = "1"
+        for _ in range(2):
+            result = self.run_install("--archive", str(self.archive))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("refreshing its service failed", result.stderr)
+        self.env.pop("FAIL_SERVICE")
+        result = self.run_install("--archive", str(self.archive))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

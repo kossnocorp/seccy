@@ -8,8 +8,10 @@ curl -fsSL https://seccy.fyi/install.sh | bash
 
 Requires a supported desktop session and hardware; see platform requirements below.
 The installer updates the app/binaries and fnox provider, skipping an already
-installed version. It never provisions keys, writes user configuration, or installs
-or restarts services. Use `--archive PATH` for a locally verified release archive.
+installed version. On macOS it refreshes an existing login service, including when
+the version is already installed, so launchd runs the installed app. It never
+provisions keys, writes user configuration, or sets up a service for the first
+time. Use `--archive PATH` for a locally verified release archive.
 
 For setup instructions, see https://seccy.fyi/install.
 
@@ -30,7 +32,8 @@ Both platforms install beneath `$XDG_DATA_HOME/seccy`, defaulting to
   (a project convention, not an XDG standard).
 
 Rerun the installer to update. Run `seccy service install` yourself when ready
-to install or refresh the login service. Configuration, keys, and state are kept
+to set up the login service; macOS updates refresh it automatically once set up.
+Configuration, keys, and state are kept
 separately from the installed bundle. The per-user installation is writable by
 your user: signature/notarization checks do not provide the file-replacement
 protection of an administrator-owned installation. macOS verification still uses

@@ -37,8 +37,20 @@ else
     executable="$prefix/bin/seccy"
 fi
 installed_version=$("$executable" --version 2>/dev/null) || installed_version=
+refresh_macos_service() {
+    # A bundle replacement does not restart launchd's existing process. Reuse
+    # service install to enable/restart it, or bootstrap an unloaded definition.
+    # Leave first-time service setup to the user.
+    if [[ $os == Darwin && -f $HOME/Library/LaunchAgents/fyi.seccy.agent.plist ]]; then
+        if ! "$executable" service install; then
+            echo 'Seccy is installed, but refreshing its service failed. Run seccy service install to retry.' >&2
+            return 1
+        fi
+    fi
+}
 skip_if_installed() {
     if [[ -n $1 && $installed_version == "seccy ${1#cli@}" ]]; then
+        refresh_macos_service
         echo "Seccy ${1#cli@} is already installed."
         echo 'https://seccy.fyi/install'
         exit 0
@@ -111,6 +123,7 @@ else
     install -m 644 "$source/system/"* "$prefix/system/"
     executable="$prefix/bin/seccy"
 fi
+refresh_macos_service
 export PATH="$bin:$PATH"
 "$executable" fnox init
 if command -v fnox >/dev/null; then
