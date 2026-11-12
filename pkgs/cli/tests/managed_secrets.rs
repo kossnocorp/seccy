@@ -341,6 +341,53 @@ fn reencrypt_failure_is_atomic_and_success_updates_recipients() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("no enrolled local prompt key"));
 }
 #[test]
+fn global_writes_allow_readable_config_directories_but_reject_unsafe_ones() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let dir = dir.path();
+    let config = dir.join("config/seccy");
+    fs::create_dir_all(&config).unwrap();
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o755)).unwrap();
+    let public = envelope::from_identity(&identity()).unwrap();
+    ok(cmd(dir)
+        .args(["s", "recipients", "add", "-g", "mac", &public, "--json"])
+        .output()
+        .unwrap());
+    ok(cmd(dir)
+        .args(["s", "set", "-g", "TEST", "--from-stdin", "--json"])
+        .output()
+        .unwrap());
+    let secrets = config.join("secrets.toml");
+    assert_eq!(
+        fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::metadata(&secrets).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let before = fs::read(&secrets).unwrap();
+    for mode in [0o775, 0o757] {
+        fs::set_permissions(&config, fs::Permissions::from_mode(mode)).unwrap();
+        let output = cmd(dir)
+            .args(["s", "set", "-g", "TEST", "--from-stdin", "--json"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(fs::read(&secrets).unwrap(), before);
+    }
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o755)).unwrap();
+    let real = dir.join("real-config");
+    fs::rename(&config, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &config).unwrap();
+    let output = cmd(dir)
+        .args(["s", "set", "-g", "TEST", "--from-stdin", "--json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert_eq!(fs::read(&secrets).unwrap(), before);
+}
+
+#[test]
 fn invalid_input_cannot_replace_existing_config() {
     let dir = tempfile::tempdir_in("/tmp").unwrap();
     let dir = dir.path();

@@ -11,6 +11,30 @@ use std::{
 use toml_edit::{DocumentMut, InlineTable, Item, Value};
 
 const MAX_FILE: u64 = 16 * 1024 * 1024;
+
+/// Existing config directories may be readable by others; only the files need
+/// private permissions. Never change permissions on an existing directory.
+pub fn config_dir(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    match fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+    {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error.into()),
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    ensure!(
+        metadata.is_dir()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.mode() & 0o022 == 0,
+        "{} must be an owned, non-symlink directory without group/world write permissions",
+        path.display()
+    );
+    Ok(())
+}
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Secret {

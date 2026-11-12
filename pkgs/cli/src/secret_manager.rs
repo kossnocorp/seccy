@@ -244,7 +244,7 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
     let _file_lock = if mutation {
         let parent = config.target.parent().context("invalid secrets path")?;
         if config.target == global {
-            crate::server::private_dir(parent)?;
+            crate::secret_config::config_dir(parent)?;
         }
         let lock = crate::secret_config::writer_lock(&paths.state, &config.target)?;
         // Reload after locking so concurrent Seccy writers cannot overwrite each other.
