@@ -72,6 +72,12 @@ pub fn respond(
     match r.take(1)?[0] {
         11 => {
             r.end()?;
+            let keys: Vec<_> = keys
+                .iter()
+                .filter(|k| {
+                    k.permits(crate::config::Use::SshAuth) || k.permits(crate::config::Use::SshSign)
+                })
+                .collect();
             tracing::debug!(
                 event = "identities_requested",
                 count = keys.len(),
@@ -98,6 +104,21 @@ pub fn respond(
             let span = tracing::info_span!("sign", request_id, agent_pid = std::process::id(), key = %key.name, fingerprint = %key.fingerprint);
             let _entered = span.enter();
             let mut payload = crate::payload::Payload::decode(message, &key.blob);
+            if key.uses.is_some() {
+                let usage = match &payload {
+                    crate::payload::Payload::SshAuthentication { .. } => {
+                        crate::config::Use::SshAuth
+                    }
+                    crate::payload::Payload::SshSignature { .. } => crate::config::Use::SshSign,
+                    crate::payload::Payload::Unknown => anyhow::bail!(
+                        "unidentified signing purpose is not permitted for a restricted key"
+                    ),
+                };
+                ensure!(
+                    key.permits(usage),
+                    "key use does not permit this signing operation"
+                );
+            }
             payload.enrich(&crate::payload::known_hosts_files());
             tracing::info!(event = "sign_requested", mode = key.mode.as_str(), algorithm = "ecdsa-sha2-nistp256", flags = 0,
                 payload_length = message.len(), payload_sha256 = %STANDARD.encode(Sha256::digest(message)),

@@ -142,7 +142,8 @@ pub fn serve(
                 let state = State::load(&Paths::from_env()?)?;
                 ensure!(
                     state.keys.get(&identity.name).is_some_and(|r| r.secrets)
-                        && identity.mode == Mode::Prompt,
+                        && identity.mode == Mode::Prompt
+                        && identity.permits(seccy_core::config::Use::Secrets),
                     "key is not enrolled for managed secrets with prompt authorization"
                 );
                 let envelope = Envelope::parse(&managed.value, &managed.name)?;
@@ -193,7 +194,8 @@ pub fn serve(
                         .context("key is not configured and provisioned in the agent")?;
                     ensure!(
                         state.keys.get(&identity.name).is_some_and(|r| r.secrets)
-                            && identity.mode == Mode::Prompt,
+                            && identity.mode == Mode::Prompt
+                            && identity.permits(seccy_core::config::Use::Secrets),
                         "key is not enrolled for managed secrets with prompt authorization"
                     );
                     let envelope = Envelope::parse(&entry.value, &entry.name)?;
@@ -248,6 +250,10 @@ pub fn serve(
                         "socket peer process changed"
                     );
                 }
+                ensure!(
+                    identity.permits(seccy_core::config::Use::Secrets),
+                    "key use does not permit secrets decryption"
+                );
                 let plaintext = platform::Store.decrypt(identity, &value, &caller)?;
                 Ok(json!({"ok": true, "value_base64": STANDARD.encode(plaintext)}))
             }

@@ -57,6 +57,10 @@ pub enum KeyStatus {
 
 #[derive(Debug, Serialize)]
 pub struct KeyInfo {
+    pub provider: Option<crate::config::Resolved>,
+    #[serde(rename = "use")]
+    pub uses: Option<crate::config::Many<crate::config::Use>>,
+    pub display_name: Option<String>,
     pub secrets: bool,
     pub config: Option<String>,
     pub name: String,
@@ -76,6 +80,9 @@ impl KeyInfo {
             None => false,
         };
         Ok(Self {
+            provider: None,
+            uses: identity.and_then(|i| i.uses.clone()),
+            display_name: identity.and_then(|i| i.display_name.clone()),
             config: None,
             secrets: false,
             name: name.into(),
@@ -115,15 +122,17 @@ pub fn key_info(
     paths: &Paths,
     name: &str,
 ) -> Result<Option<KeyInfo>> {
-    let Some(key) = config.keys.get(name) else {
+    let Some(_key) = config.keys.get(name) else {
         return Ok(None);
     };
+    let policy = config.resolve(name)?;
+    policy.ensure_available()?;
     let identity = store
-        .identity(name, key.mode)?
+        .identity(name, policy.mode)?
         .map(|i| i.with_email(config.effective_email(name)));
     Ok(Some(KeyInfo::new(
         name,
-        key.mode,
+        policy.mode,
         identity.as_ref(),
         paths,
     )?))

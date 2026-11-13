@@ -111,7 +111,32 @@ fn recipients(config: &Config, selected: &[String]) -> Result<(Vec<String>, Vec<
         .collect::<Result<Vec<_>>>()?;
     Ok((names, public))
 }
-fn decrypt(name: &str, secret: &Secret, selected: Option<&str>) -> Result<Zeroizing<Vec<u8>>> {
+fn check_configured_identity(config: &seccy_core::Config, state: &State, name: &str) -> Result<()> {
+    if let Some(key) = config.keys.get(name) {
+        let policy = config.resolve(name)?;
+        policy.ensure_available()?;
+        ensure!(
+            key.uses
+                .as_ref()
+                .is_none_or(|u| u.0.contains(&seccy_core::config::Use::Secrets)),
+            "key use does not permit secrets"
+        );
+        if let Some(record) = state.keys.get(name) {
+            ensure!(
+                record.mode == policy.mode
+                    && record.policy.as_ref().is_none_or(|old| old == &policy),
+                "migration_required: selected config does not match enrolled identity"
+            );
+        }
+    }
+    Ok(())
+}
+fn decrypt(
+    name: &str,
+    secret: &Secret,
+    selected: Option<&str>,
+    key_config: &seccy_core::Config,
+) -> Result<Zeroizing<Vec<u8>>> {
     let paths = Paths::from_env()?;
     let _lock = crate::inventory::read_lock(&paths)?;
     let state = State::load(&paths)?;
@@ -120,6 +145,7 @@ fn decrypt(name: &str, secret: &Secret, selected: Option<&str>) -> Result<Zeroiz
         && selected.is_none_or(|s| s == key.as_str())
         && record.fingerprint.as_ref().is_some_and(|f| envelope.wrapped.contains_key(f)))
         .map(|(name,_)| name.clone()).context("no enrolled local prompt key matches this secret; enroll a matching key or select --identity")?;
+    check_configured_identity(key_config, &state, &identity)?;
     drop(_lock);
     let mut response = crate::secrets::request(
         None,
@@ -143,6 +169,7 @@ fn decrypt_batch(
     names: &[String],
     config: &Config,
     selected: Option<&str>,
+    key_config: &seccy_core::Config,
 ) -> Result<Vec<Zeroizing<Vec<u8>>>> {
     if names.is_empty() {
         return Ok(Vec::new());
@@ -158,6 +185,7 @@ fn decrypt_batch(
             && selected.is_none_or(|s| s == key.as_str())
             && record.fingerprint.as_ref().is_some_and(|f| envelope.wrapped.contains_key(f)))
             .map(|(name,_)| name).context("no enrolled local prompt key matches this secret; enroll a matching key or select --identity")?;
+        check_configured_identity(key_config, &state, identity)?;
         entries.push(json!({"key": identity, "name": name, "value": secret.value}));
     }
     drop(lock);
@@ -186,7 +214,12 @@ fn decrypt_batch(
     }
     Ok(result)
 }
-pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
+pub fn run(
+    mut args: SecretsArgs,
+    paths: &Paths,
+    global: &std::path::Path,
+    output: &Output,
+) -> Result<()> {
     // Resolve the logical key handle once, independently of the storage backend.
     // An explicit selection must never fall back to another identity.
     match std::env::var("SECCY_IDENTITY") {
@@ -202,8 +235,17 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
             "identity key handle must not be empty"
         );
     }
-    let paths = Paths::from_env()?;
-    let global = paths.config.with_file_name("secrets.toml");
+
+    let key_config = seccy_core::Config::load(&paths.config)?;
+    if let Some(selected) = args.identity.as_deref()
+        && matches!(
+            args.command,
+            SecretsCommand::Get(_) | SecretsCommand::Exec(_) | SecretsCommand::Reencrypt(_)
+        )
+        && key_config.keys.contains_key(selected)
+    {
+        key_config.resolve(selected)?.ensure_available()?;
+    }
     let cwd = std::env::current_dir()?;
     let mutation = matches!(
         args.command,
@@ -219,8 +261,12 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
         !(args.global && args.file.is_some()),
         "--global and --secrets are mutually exclusive"
     );
-    if mutation && !args.global && args.file.is_none() {
-        let mut detected = crate::secret_config::detected_files(&global, &cwd)?;
+    if mutation && args.file.is_none() {
+        let mut detected = crate::secret_config::detected_files(global, &cwd)?;
+        if args.global {
+            let family = crate::secret_config::global_files(global);
+            detected.retain(|p| family.contains(p));
+        }
         detected.reverse(); // closest project first, global last
         if detected.len() > 1 {
             ensure!(
@@ -238,17 +284,18 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
             )?;
             // Exactly the same isolated scope as an explicit --secrets selection.
             args.file = Some(detected[index].clone());
+            args.global = false;
         }
     }
-    let mut config = Config::load(&global, &cwd, args.file.as_deref(), args.global)?;
+    let mut config = Config::load(global, &cwd, args.file.as_deref(), args.global)?;
     let _file_lock = if mutation {
         let parent = config.target.parent().context("invalid secrets path")?;
-        if config.target == global {
+        if crate::secret_config::global_files(global).contains(&config.target) {
             crate::secret_config::config_dir(parent)?;
         }
         let lock = crate::secret_config::writer_lock(&paths.state, &config.target)?;
         // Reload after locking so concurrent Seccy writers cannot overwrite each other.
-        config = Config::load(&global, &cwd, args.file.as_deref(), args.global)?;
+        config = Config::load(global, &cwd, args.file.as_deref(), args.global)?;
         Some(lock)
     } else {
         None
@@ -317,7 +364,7 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
         }
         SecretsCommand::Get(get) => {
             let secret = config.secrets.get(&get.name).context("secret not found")?;
-            let value = decrypt(&get.name, secret, args.identity.as_deref())?;
+            let value = decrypt(&get.name, secret, args.identity.as_deref(), &key_config)?;
             if output.structured() {
                 output.emit(
                     json!({"ok":true,"name":get.name,"value_base64":B64.encode(&*value)}),
@@ -353,7 +400,7 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
             }
             let mut child = Command::new(&command[0]);
             child.args(&command[1..]);
-            let values = decrypt_batch(&names, &config, args.identity.as_deref())?;
+            let values = decrypt_batch(&names, &config, args.identity.as_deref(), &key_config)?;
             for (name, bytes) in names.iter().zip(values) {
                 ensure!(
                     !bytes.contains(&0),
@@ -368,7 +415,7 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
         SecretsCommand::Enroll(enroll) => {
             crate::server::private_dir(&paths.state)?;
             let _lock = crate::server::lock(&paths.state.join("state.lock"))?;
-            let mut state = State::load(&paths)?;
+            let mut state = State::load(paths)?;
             let candidates = state
                 .keys
                 .iter()
@@ -379,6 +426,7 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
                 Some(k) => k,
                 None => choose(&candidates, "prompt key", output)?,
             };
+            check_configured_identity(&key_config, &state, &key)?;
             let record = state
                 .keys
                 .get(&key)
@@ -390,13 +438,27 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
             let identity = state
                 .identity(&seccy_macos::SecureEnclave, &key)?
                 .context("key is not provisioned")?;
+            ensure!(
+                identity.permits(seccy_core::config::Use::Secrets),
+                "key use does not permit secrets enrollment"
+            );
+            let configured = seccy_core::Config::load(&paths.config)?;
+            if let Some(k) = configured.keys.get(&key) {
+                configured.resolve(&key)?.ensure_available()?;
+                ensure!(
+                    k.uses
+                        .as_ref()
+                        .is_none_or(|u| u.0.contains(&seccy_core::config::Use::Secrets)),
+                    "key use does not permit secrets enrollment"
+                );
+            }
             seccy_macos::SecureEnclave.crypto_check(&identity)?;
             let public = envelope::from_identity(&identity)?;
             let alias = enroll.name.unwrap_or(key.clone());
             config.put_recipient(&alias, &public)?;
             state.keys.get_mut(&key).unwrap().secrets = true;
             // Enrollment is idempotent; a failed config write can be retried safely.
-            state.save(&paths)?;
+            state.save(paths)?;
             config.save()?;
             output.emit(json!({"ok":true,"key":key,"name":alias,"recipient":public,"fingerprint":identity.fingerprint,"file":config.target}), &public)?;
         }
@@ -410,7 +472,7 @@ pub fn run(mut args: SecretsArgs, output: &Output) -> Result<()> {
                 .collect();
             // All decryptions and encryptions succeed before the single atomic replacement.
             for (name, secret) in &active {
-                let clear = decrypt(name, secret, args.identity.as_deref())?;
+                let clear = decrypt(name, secret, args.identity.as_deref(), &key_config)?;
                 let value = envelope::encrypt(name, &clear, &public, seccy_macos::wrap_secret_key)?;
                 config.put_secret(
                     name,

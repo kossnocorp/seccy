@@ -272,3 +272,39 @@ fn git_signed_commit_and_openssh_identity_listing() {
     stop.store(true, Ordering::SeqCst);
     assert_eq!(worker.join().unwrap(), 1);
 }
+
+#[test]
+fn explicit_key_uses_gate_signing_before_the_store_and_filter_inventory() {
+    let _guard = AGENT_TEST_LOCK.lock().unwrap();
+    use seccy_core::config::{Many, Use};
+    let store = Store::new();
+    let mut key = store.identity("restricted", Mode::Prompt).unwrap().unwrap();
+    key.uses = Some(Many(vec![Use::Secrets]));
+    let listed = agent::respond(&store, &[key.clone()], &caller(), &[11]).unwrap();
+    assert_eq!(listed, vec![12, 0, 0, 0, 0]);
+    let mut message = b"SSHSIG".to_vec();
+    agent::string(&mut message, b"git");
+    agent::string(&mut message, b"");
+    agent::string(&mut message, b"sha256");
+    agent::string(&mut message, &[7; 32]);
+    let mut request = vec![13];
+    agent::string(&mut request, &key.blob);
+    agent::string(&mut request, &message);
+    request.extend_from_slice(&0u32.to_be_bytes());
+    assert!(agent::respond(&store, &[key.clone()], &caller(), &request).is_err());
+    key.uses = Some(Many(vec![Use::SshAuth]));
+    assert!(agent::respond(&store, &[key.clone()], &caller(), &request).is_err());
+    assert_eq!(store.calls.load(Ordering::SeqCst), 0);
+    key.uses = Some(Many(vec![Use::SshSign]));
+    assert_eq!(
+        agent::respond(&store, &[key.clone()], &caller(), &request).unwrap()[0],
+        14
+    );
+    assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+    let mut unknown = vec![13];
+    agent::string(&mut unknown, &key.blob);
+    agent::string(&mut unknown, b"unclassified message");
+    unknown.extend_from_slice(&0u32.to_be_bytes());
+    assert!(agent::respond(&store, &[key], &caller(), &unknown).is_err());
+    assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+}

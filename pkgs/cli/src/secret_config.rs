@@ -126,17 +126,22 @@ fn read(path: &Path) -> Result<Option<String>> {
     Ok(Some(text))
 }
 /// Global first, then every ancestor including filesystem root, ending at cwd.
+pub fn global_files(global: &Path) -> Vec<PathBuf> {
+    [
+        Some(global.to_owned()),
+        seccy_core::config::local_path(global),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
 fn candidates(global: &Path, cwd: &Path) -> Vec<PathBuf> {
-    let mut paths = vec![global.to_owned()];
-    for path in cwd
-        .ancestors()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .map(|p| p.join("seccy.toml"))
-    {
-        if !paths.contains(&path) {
-            paths.push(path);
+    let mut paths = global_files(global);
+    for parent in cwd.ancestors().collect::<Vec<_>>().into_iter().rev() {
+        for path in [parent.join("seccy.toml"), parent.join("seccy.local.toml")] {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
         }
     }
     paths
@@ -180,7 +185,7 @@ impl Config {
             !(file.is_some() && global_only),
             "--secrets and --global are mutually exclusive"
         );
-        let mut paths = vec![global.to_owned()];
+        let mut paths = global_files(global);
         let target;
         if let Some(file) = file {
             target = if file.is_absolute() {
@@ -191,14 +196,19 @@ impl Config {
             // --secrets is isolated: portable files must not depend on implicit global recipients.
             paths = vec![target.clone()];
         } else if global_only {
-            target = global.to_owned();
+            target = paths
+                .iter()
+                .rev()
+                .find(|p| p.exists())
+                .cloned()
+                .unwrap_or_else(|| global.to_owned());
         } else {
             for path in detected_files(global, cwd)? {
                 if !paths.contains(&path) {
                     paths.push(path);
                 }
             }
-            target = if paths.len() > 1 {
+            target = if paths.len() > global_files(global).len() {
                 paths.last().unwrap().clone()
             } else {
                 cwd.join("seccy.toml")
@@ -454,9 +464,13 @@ mod tests {
             candidates(global, Path::new("/a/b")),
             vec![
                 global.to_owned(),
+                global.with_file_name("secrets.local.toml"),
                 PathBuf::from("/seccy.toml"),
+                PathBuf::from("/seccy.local.toml"),
                 PathBuf::from("/a/seccy.toml"),
-                PathBuf::from("/a/b/seccy.toml")
+                PathBuf::from("/a/seccy.local.toml"),
+                PathBuf::from("/a/b/seccy.toml"),
+                PathBuf::from("/a/b/seccy.local.toml")
             ]
         );
         let dir = tempfile::tempdir().unwrap();

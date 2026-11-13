@@ -1,14 +1,21 @@
 # Copy to ~/.config/seccy/config.toml (or $XDG_CONFIG_HOME/seccy/config.toml).
+# See docs/providers.md for selectors, named providers and local overrides.
 log_level = "info"
-
 email = "koss@nocorp.me"
-
-[keys.ssh]
 mode = "prompt"
-github = "auth"
+# macOS defaults to secure-enclave. Linux requires an explicit provider:
+# provider = "tpm-fido2-hmac"
+
+[keys.auth]
+use = "ssh-auth"
+forge = "github"
 
 [keys.signing]
-mode = "notify"
-github = "signing"
-# Optional per-key override; otherwise inherits the top-level email.
+use = "ssh-sign"
+mode = "notify" # Secure Enclave only.
+forge = "github"
 email = "work@example.com"
+
+[keys.secrets]
+use = "secrets"
+name = "Machine secrets"

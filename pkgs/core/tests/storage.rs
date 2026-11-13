@@ -79,6 +79,10 @@ fn inventory_and_sync_update_comments_without_changing_key() {
         "email='old@example.com'\n[keys.work]\nmode='notify'\n[keys.missing]\nmode='prompt'",
     )
     .unwrap();
+    if cfg!(target_os = "linux") {
+        config.provider = Some(seccy_core::config::Selector::Named("tpm-fido2-hmac".into()));
+        config.keys.get_mut("work").unwrap().mode = Some(Mode::Prompt);
+    }
     let missing = key_info(&Store, &config, &paths, "missing")
         .unwrap()
         .unwrap();
@@ -91,7 +95,7 @@ fn inventory_and_sync_update_comments_without_changing_key() {
             .is_none()
     );
     let key = Store
-        .identity("work", Mode::Notify)
+        .identity("work", config.resolve("work").unwrap().mode)
         .unwrap()
         .unwrap()
         .with_email(config.effective_email("work"));

@@ -136,6 +136,8 @@ device. A wrong authenticator never results in automatic replacement enrollment.
 ## Keys, agent, Git, and fnox
 
 ```toml
+provider = "tpm-fido2-hmac" # Explicit opt-in to the existing Linux backend.
+
 email = "you@example.com"
 
 [keys.personal]

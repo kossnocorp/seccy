@@ -56,12 +56,22 @@ struct App {
     /// Filter JSON with jq; exit 1 for false/null, 4 for no results
     #[usage(long, global)]
     jq_exit_status: Option<String>,
+    /// Override the global key configuration base (and its .local.toml companion)
+    #[usage(short = 'c', long = "config", alias = "c", global)]
+    config: Option<PathBuf>,
+    /// Override the global secrets base (and its .local.toml companion)
+    #[usage(long = "global-secrets", alias = "gs", global)]
+    global_secrets: Option<PathBuf>,
     #[usage(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommands)]
 enum Commands {
+    /// Inspect the effective configuration and provider resolution without hardware access
+    Config(ConfigArgs),
+    /// Inspect implemented and planned provider capabilities
+    Providers(ProviderArgs),
     /// Manage multi-recipient secrets (macOS Secure Enclave)
     #[usage(alias = "s")]
     Secrets(secret_args::SecretsArgs),
@@ -95,6 +105,25 @@ enum Commands {
     Service(ServiceArgs),
     /// Manage GitHub SSH keys using gh
     Gh(GhArgs),
+}
+
+#[derive(Args)]
+struct ConfigArgs {
+    #[usage(subcommand)]
+    command: ConfigCommand,
+}
+#[derive(Subcommands)]
+enum ConfigCommand {
+    Inspect(Empty),
+}
+#[derive(Args)]
+struct ProviderArgs {
+    #[usage(subcommand)]
+    command: ProviderCommand,
+}
+#[derive(Subcommands)]
+enum ProviderCommand {
+    List(Empty),
 }
 
 #[derive(Args)]
@@ -316,10 +345,48 @@ fn run(app: App, output: &Output) -> Result<()> {
     if let Commands::Activate(args) = &app.command {
         return activate::run(args.shell_type.as_deref(), output);
     }
-    logging::init()?;
+    let mut paths = seccy_core::storage::Paths::from_env()?;
+    let global_secrets = app
+        .global_secrets
+        .as_ref()
+        .map(std::path::absolute)
+        .transpose()?
+        .unwrap_or_else(|| paths.config.with_file_name("secrets.toml"));
+    if let Some(config) = &app.config {
+        paths.config = std::path::absolute(config)?;
+    }
+    logging::init(&paths)?;
+    if let Commands::Providers(_) = &app.command {
+        let providers = seccy_core::config::catalog();
+        let text = providers
+            .iter()
+            .map(|p| {
+                format!(
+                    "{}\t{}\t{}",
+                    p.kind,
+                    p.status,
+                    p.platform.unwrap_or("planned")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return output.emit(json!({"ok":true,"providers":providers}), &text);
+    }
+    if let Commands::Config(_) = &app.command {
+        let config = Config::load(&paths.config)?;
+        let host = seccy_core::config::hostname()?;
+        let keys = config.keys.keys().map(|name| {
+            match config.resolve_for(name, std::env::consts::OS, &host) {
+                Ok(resolved) => {let availability = resolved.ensure_available().err().map(|e|e.to_string());json!({"name":name,"provider":resolved,"available":availability.is_none(),"error":availability})},
+                Err(e) => json!({"name":name,"available":false,"error":format!("{e:#}")}),
+            }
+        }).collect::<Vec<_>>();
+        let value = json!({"ok":true,"config":config,"warnings":config.warnings(),"sources":config.sources,"provenance":config.provenance,"os":std::env::consts::OS,"host":host,"keys":keys});
+        return output.emit(value.clone(), &serde_json::to_string_pretty(&value)?);
+    }
     if let Commands::Secrets(args) = app.command {
         #[cfg(target_os = "macos")]
-        return secret_manager::run(args, output);
+        return secret_manager::run(args, &paths, &global_secrets, output);
         #[cfg(not(target_os = "macos"))]
         {
             let _ = args;
@@ -359,6 +426,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         }
     }
     let command = match &app.command {
+        Commands::Config(_) | Commands::Providers(_) => unreachable!(),
         Commands::Secrets(_) => unreachable!(),
         Commands::Activate(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
@@ -376,7 +444,6 @@ fn run(app: App, output: &Output) -> Result<()> {
         Commands::Service(_) => "service",
         Commands::Gh(_) => "gh",
     };
-    let paths = seccy_core::storage::Paths::from_env()?;
     tracing::info!(event = "command_started", command, config = %paths.config.display());
     let config = if matches!(
         app.command,
@@ -391,20 +458,27 @@ fn run(app: App, output: &Output) -> Result<()> {
     } else {
         Config::load(&paths.config)?
     };
-    run_platform(app, config, output)
+    for warning in config.warnings() {
+        eprintln!("warning: {warning}");
+    }
+    run_platform(app, config, &paths, output)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn run_platform(_: App, _: Config, _: &Output) -> Result<()> {
+fn run_platform(_: App, _: Config, _: &seccy_core::storage::Paths, _: &Output) -> Result<()> {
     anyhow::bail!("Secure Enclave operations require macOS")
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn run_platform(app: App, config: Config, output: &Output) -> Result<()> {
-    use seccy_core::storage::Paths;
+fn run_platform(
+    app: App,
+    config: Config,
+    paths: &seccy_core::storage::Paths,
+    output: &Output,
+) -> Result<()> {
     let store = platform::Store;
-    let paths = Paths::from_env()?;
     match app.command {
+        Commands::Config(_) | Commands::Providers(_) => unreachable!(),
         Commands::Secrets(_) => unreachable!(),
         Commands::Activate(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
@@ -415,20 +489,24 @@ fn run_platform(app: App, config: Config, output: &Output) -> Result<()> {
         | Commands::Sync(_)
         | Commands::Remove(_)
         | Commands::Reset(_)) => {
-            inventory::run(command, &config, &paths.config, &paths, output)?;
+            inventory::run(command, &config, &paths.config, paths, output)?;
         }
-        Commands::Service(args) => service::run(args.command, &paths, output)?,
+        Commands::Service(args) => service::run(args.command, paths, output)?,
         Commands::Gh(args) => match args.command {
-            GhCommand::Sync(args) => gh::run(args, &config, &paths.config, &paths, output)?,
+            GhCommand::Sync(args) => gh::run(args, &config, &paths.config, paths, output)?,
         },
         Commands::Agent(args) => server::run(args.socket, output)?,
         Commands::Encrypt(args) => {
             use anyhow::Context;
-            let _lock = inventory::read_lock(&paths)?;
-            let state = inventory::view(&paths, &config, &paths.config)?;
+            let _lock = inventory::read_lock(paths)?;
+            let state = inventory::view(paths, &config, &paths.config)?;
             let identity = state
                 .identity(&store, &args.name)?
                 .context("key is not provisioned")?;
+            anyhow::ensure!(
+                identity.permits(seccy_core::config::Use::Secrets),
+                "key use does not permit secrets"
+            );
             let input = secrets::read_stdin(platform::MAX_SECRET_BYTES)?;
             let value = store.encrypt(&identity, &input)?;
             emit(output, json!({"ok": true, "value": value}), &value)?;

@@ -1,6 +1,6 @@
-//! Persistent inventory. Source configurations are provisioning inputs only.
+//! Persistent inventory with pinned policies and live permission narrowing.
 use crate::{
-    Config, Identity, KeyConfig, KeyStore, Mode,
+    Config, Identity, KeyStore, Mode,
     storage::{KeyInfo, Paths},
 };
 use anyhow::{Context, Result, ensure};
@@ -15,6 +15,14 @@ use std::{
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Record {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub policy: Option<crate::config::Resolved>,
+    #[serde(default, rename = "use")]
+    pub uses: Option<crate::config::Many<crate::config::Use>>,
+    #[serde(default)]
+    pub github_roles: Option<Vec<crate::Github>>,
     /// Explicit local consent to use this key for managed secrets.
     #[serde(default)]
     pub secrets: bool,
@@ -48,20 +56,25 @@ impl State {
         let state: Self = toml::from_str(&text).context("invalid seccy state.toml")?;
         // Reuse configuration validation for names and emails before filesystem access.
         for (name, record) in &state.keys {
-            let config = Config {
-                log_level: None,
-                email: None,
-                keys: [(
-                    name.clone(),
-                    KeyConfig {
-                        mode: record.mode,
-                        github: record.github,
-                        email: record.email.clone(),
-                    },
-                )]
-                .into(),
-            };
-            Config::parse(&toml::to_string(&config)?)?;
+            crate::config::validate_email(record.email.as_deref(), "registry email")?;
+            ensure!(
+                crate::config::valid_handle(name),
+                "invalid registry key name"
+            );
+            if let Some(policy) = &record.policy {
+                ensure!(policy.mode == record.mode, "registry policy/mode mismatch");
+                ensure!(
+                    policy.kind == crate::config::platform_kind(),
+                    "registry provider does not match this platform"
+                );
+            }
+            if let Some(uses) = &record.uses {
+                ensure!(!uses.0.is_empty(), "registry use must not be empty");
+                ensure!(
+                    !record.secrets || uses.0.contains(&crate::config::Use::Secrets),
+                    "registry secrets permission mismatch"
+                );
+            }
             ensure!(
                 record.config.is_absolute(),
                 "state config path must be absolute"
@@ -84,11 +97,17 @@ impl State {
         Ok(())
     }
 
-    pub fn overlay(&mut self, config: &Config, source: &Path) {
+    pub fn overlay(&mut self, config: &Config, source: &Path) -> Result<()> {
         for (name, key) in &config.keys {
+            let policy = config.resolve(name)?;
+            policy.ensure_available()?;
             self.keys.entry(name.clone()).or_insert_with(|| Record {
+                display_name: key.name.clone(),
+                policy: Some(policy.clone()),
+                uses: key.uses.clone(),
+                github_roles: Some(key.github_roles()),
                 secrets: false,
-                mode: key.mode,
+                mode: policy.mode,
                 github: key.github,
                 config: source.into(),
                 email: config.effective_email(name).map(str::to_owned),
@@ -96,15 +115,39 @@ impl State {
                 fingerprint: None,
             });
         }
+        Ok(())
     }
 
     pub fn identity(&self, store: &impl KeyStore, name: &str) -> Result<Option<Identity>> {
         let Some(record) = self.keys.get(name) else {
             return Ok(None);
         };
-        Ok(store
-            .identity(name, record.mode)?
-            .map(|i| i.with_email(record.email.as_deref())))
+        let config = Config::load(&record.config)?;
+        let mut uses = record.uses.clone();
+        if let Some(key) = config.keys.get(name) {
+            let policy = config.resolve(name)?;
+            policy.ensure_available()?;
+            ensure!(
+                policy.mode == record.mode
+                    && record.policy.as_ref().is_none_or(|old| old == &policy),
+                "migration_required: provider policy changed for {name}"
+            );
+            if let Some(requested) = &key.uses {
+                uses = Some(crate::config::Many(
+                    requested
+                        .0
+                        .iter()
+                        .copied()
+                        .filter(|u| record.uses.as_ref().is_none_or(|old| old.0.contains(u)))
+                        .collect(),
+                ));
+            }
+        }
+        Ok(store.identity(name, record.mode)?.map(|mut i| {
+            i.uses = uses;
+            i.display_name = record.display_name.clone();
+            i.with_email(record.email.as_deref())
+        }))
     }
 
     pub fn info(
@@ -119,6 +162,9 @@ impl State {
         let identity = self.identity(store, name)?;
         let mut info = KeyInfo::new(name, record.mode, identity.as_ref(), paths)?;
         info.secrets = record.secrets;
+        info.provider = record.policy.clone();
+        info.uses = record.uses.clone();
+        info.display_name = record.display_name.clone();
         info.config = Some(display_path(&record.config));
         Ok(Some(info))
     }

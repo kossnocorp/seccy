@@ -981,6 +981,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "base64 0.22.1",
+ "libc",
  "p256",
  "rand_core",
  "serde",

@@ -5,15 +5,19 @@ fn registry_roundtrips_sources_and_does_not_overwrite_registered_keys() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
     std::fs::create_dir_all(&paths.state).unwrap();
-    let first = Config::parse("email='first@example.com'\n[keys.one]\nmode='notify'").unwrap();
-    let second = Config::parse("[keys.one]\nmode='prompt'\nemail='ignored@example.com'\n[keys.two]\nmode='prompt'\nemail='work@example.com'\n[keys.three]\nmode='notify'").unwrap();
+    let first = platform_config("email='first@example.com'\n[keys.one]\nmode='notify'").unwrap();
+    let second = platform_config("[keys.one]\nmode='prompt'\nemail='ignored@example.com'\n[keys.two]\nmode='prompt'\nemail='work@example.com'\n[keys.three]\nmode='notify'").unwrap();
     let mut state = State::default();
-    state.overlay(&first, &dir.path().join("first.toml"));
+    state
+        .overlay(&first, &dir.path().join("first.toml"))
+        .unwrap();
     state.save(&paths).unwrap();
     state = State::load(&paths).unwrap();
-    state.overlay(&second, &dir.path().join("second.toml"));
+    state
+        .overlay(&second, &dir.path().join("second.toml"))
+        .unwrap();
     assert_eq!(state.keys["one"].config, dir.path().join("first.toml"));
-    assert_eq!(state.keys["one"].mode, seccy_core::Mode::Notify);
+    assert_eq!(state.keys["one"].mode, first.resolve("one").unwrap().mode);
     assert_eq!(
         state.keys["one"].email.as_deref(),
         Some("first@example.com")
@@ -55,5 +59,16 @@ fn registry_rejects_unsafe_names_relative_sources_and_corruption() {
     ] {
         std::fs::write(paths.state.join("state.toml"), text).unwrap();
         assert!(State::load(&paths).is_err());
+    }
+}
+
+fn platform_config(text: &str) -> anyhow::Result<Config> {
+    if cfg!(target_os = "linux") {
+        Config::parse(&format!(
+            "provider='tpm-fido2-hmac'\n{}",
+            text.replace("mode='notify'", "mode='prompt'")
+        ))
+    } else {
+        Config::parse(text)
     }
 }

@@ -45,8 +45,12 @@ stdout clean; structured output requires explicit names instead of pickers.
 ## Files and recipients
 
 The user file is `$XDG_CONFIG_HOME/seccy/secrets.toml`, defaulting to
-`~/.config/seccy/secrets.toml`. Seccy also reads `seccy.toml` from filesystem-root
-ancestors through the current directory, in that order. The closest definition of
+`~/.config/seccy/secrets.toml`, followed by `secrets.local.toml` beside it.
+Seccy then reads `seccy.toml` and `seccy.local.toml` at each directory from
+filesystem root through the current directory. At the same level the local file
+wins; a closer base file overrides both files at higher levels. Local-only
+directories are included. `--global-secrets PATH` (`--gs`) replaces the global
+base path; `--config PATH` selects key configuration independently. The closest definition of
 a secret wins over ancestors and the user file. Recipient aliases merge, but the
 same alias naming different public keys is an error: use a new alias for rotation.
 Each secret must reference recipients available at its defining file, rather than
@@ -76,14 +80,15 @@ Each row includes recipient aliases and secret names, never values. Use Up/Down
 (or j/k), then Enter; Escape or Ctrl-C cancels without changing any files. Picking
 a file is exactly equivalent to passing `--secrets PATH`: only that file is loaded,
 so inherited secrets and recipients are not included for that operation. Explicit
-`-g` or `-s` skips the picker. Structured output and noninteractive invocations must
-specify `-g` or `-s` when multiple files exist. Piped `--from-stdin` values remain
+`-s` skips the picker. `-g` restricts candidates to the global base and local
+companion; when both exist a mutation still needs a target. Structured output and
+noninteractive invocations must select `-s`, or `-g` with only one global file. Piped `--from-stdin` values remain
 untouched because selection uses the controlling terminal.
 
 Existing comments are preserved. Public recipients referenced by a newly written
 secret are copied into that file, keeping it portable.
 
-- `-g` / `--global` reads and writes only the user secrets file.
+- `-g` / `--global` reads only the global base/local pair; writes select a file within that pair.
 - `-s PATH` / `--secrets PATH` reads and writes only the specified file, without global inheritance.
 - Both options can appear after the subcommand; they are mutually exclusive.
   `--file` remains a compatibility alias for `--secrets`.

@@ -71,6 +71,10 @@ fn mock_agent(
         keys: [(
             key.name.clone(),
             seccy_core::state::Record {
+                display_name: None,
+                policy: None,
+                uses: None,
+                github_roles: None,
                 secrets: true,
                 mode: Mode::Prompt,
                 github: None,
@@ -650,4 +654,85 @@ fn arrow_picker_isolated_selection_and_cancellation_preserve_other_files() {
     let output = pick_file(cwd, &["s", "remove", "GLOBAL_ONLY"], b"\x1b[B\x1b[A\r", b"");
     assert!(!output.status.success());
     assert_eq!(fs::read(&global).unwrap(), global_after);
+}
+
+#[test]
+fn local_overlays_follow_directory_order_and_global_path_is_independent() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let base = dir.path().canonicalize().unwrap();
+    let code = base.join("code");
+    let project = code.join("project");
+    let package = project.join("pkgs/pkg");
+    let cwd = package.join("scripts");
+    fs::create_dir_all(&cwd).unwrap();
+    let global = base.join("custom-secrets.toml");
+    let global_local = base.join("custom-secrets.local.toml");
+    let b = code.join("seccy.toml");
+    let a = code.join("seccy.local.toml");
+    let c = project.join("seccy.toml");
+    let d = package.join("seccy.local.toml");
+    let e = cwd.join("seccy.toml");
+    for (path, name) in [
+        (&global, "G"),
+        (&global_local, "L"),
+        (&b, "B"),
+        (&a, "A"),
+        (&c, "C"),
+        (&d, "D"),
+        (&e, "E"),
+    ] {
+        write_scope(path, &[("SHARED", name), (name, name)]);
+    }
+    for expected in [&e, &d, &c, &a, &b] {
+        let out = ok(cmd(&cwd)
+            .args(["s", "list", "--json", "--gs"])
+            .arg(&global)
+            .output()
+            .unwrap());
+        let shared = out["secrets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["name"] == "SHARED")
+            .unwrap();
+        assert_eq!(shared["source"], expected.to_str().unwrap());
+        fs::remove_file(expected).unwrap();
+    }
+    let key_config = base.join("bootstrap.toml");
+    fs::write(&key_config, "[keys.test]\nuse='secrets'").unwrap();
+    let out = ok(cmd(&cwd)
+        .args(["s", "list", "-g", "--json", "--global-secrets"])
+        .arg(&global)
+        .arg("-c")
+        .arg(&key_config)
+        .output()
+        .unwrap());
+    assert_eq!(out["secrets"].as_array().unwrap().len(), 3);
+    let shared = out["secrets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["name"] == "SHARED")
+        .unwrap();
+    assert_eq!(shared["source"], global_local.to_str().unwrap());
+    let out = ok(cmd(&cwd)
+        .args(["s", "list", "--json", "-s"])
+        .arg(&global)
+        .output()
+        .unwrap());
+    assert_eq!(out["secrets"].as_array().unwrap().len(), 2);
+    let before = fs::read(&global).unwrap();
+    let out = cmd(&cwd)
+        .args(["s", "set", "NEW", "-g", "--from-stdin", "--json", "--gs"])
+        .arg(&global)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert_eq!(fs::read(&global).unwrap(), before);
+    ok(cmd(&cwd)
+        .args(["s", "set", "NEW", "--from-stdin", "--json", "-s"])
+        .arg(&global_local)
+        .output()
+        .unwrap());
+    assert_eq!(fs::read(&global).unwrap(), before);
 }

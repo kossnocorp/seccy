@@ -7,11 +7,10 @@ use std::{
 };
 use tracing_subscriber::filter::LevelFilter;
 
-pub fn init() -> Result<()> {
+pub fn init(paths: &Paths) -> Result<()> {
     let (value, source) = match std::env::var("LOG_LEVEL") {
         Ok(value) => (value, "LOG_LEVEL".to_owned()),
         Err(_) => {
-            let paths = Paths::from_env()?;
             // Configuration-independent commands still work with a missing or
             // malformed config. Commands consuming keys report load errors later.
             let config = seccy_core::Config::load(&paths.config).ok();

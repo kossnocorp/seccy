@@ -1,9 +1,10 @@
 # Provider and configuration model
 
-Status: proposed design, not implemented configuration syntax. This document covers
-the related work in [the roadmap](../TODO.md). Existing configuration and ciphertext
-continue to work unchanged until an explicit implementation/migration is delivered.
-Hardware support described as planned is not available merely because it has a name here.
+Status: the configuration foundation is implemented. See [current provider support](providers.md)
+for the supported syntax, inspection commands, overlays and compatibility behavior.
+Secure Enclave and the existing Linux TPM/FIDO2-HMAC backend are connected to the resolver.
+New hardware providers, portable bindings, explicit key replacement and sessions below
+remain planned. Naming a planned provider never enables it or falls back to another backend.
 
 ## Recommendation
 
@@ -233,7 +234,7 @@ reports where each effective parameter came from, including key-level overrides.
 
 ```toml
 [keys.signing]
-mode = "prompt"
+mode = "notify"
 github = "signing"
 ```
 
@@ -242,13 +243,11 @@ provider and deprecated GitHub field. Linux still needs an explicit provider und
 the newly agreed selection rules. The key handle `signing` does not grant signing
 permissions by itself; omitted `use` follows the legacy compatibility rules.
 
-The current `Mode` enum accepts only `prompt` and `notify`, so `mode = "signing"`
-was never valid configuration and should remain an error with a suggestion to use
-`use = "ssh-sign"`. A recommended explicit form is:
+The equivalent recommended form keeps notify mode explicit:
 
 ```toml
 [keys.signing]
-mode = "prompt"
+mode = "notify"
 use = "ssh-sign"
 forge = "github"
 ```

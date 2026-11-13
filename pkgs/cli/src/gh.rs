@@ -153,20 +153,38 @@ pub fn run(
     let state = crate::inventory::view(paths, config, source)?;
     let mut desired = Vec::new();
     for (name, record) in &state.keys {
-        let kind = config
+        let roles = config
             .keys
             .get(name)
-            .map_or(record.github, |key| key.github);
-        let Some(kind) = kind else { continue };
+            .map(|k| k.github_roles())
+            .unwrap_or_else(|| {
+                record
+                    .github_roles
+                    .clone()
+                    .unwrap_or_else(|| record.github.into_iter().collect())
+            });
+        if roles.is_empty() {
+            continue;
+        }
         let identity = state.identity(&platform::Store, name)?.with_context(|| {
             format!("GitHub key {name} is not provisioned; run seccy provision first")
         })?;
-        desired.push(Key {
-            kind,
-            title: format!("{prefix}{name}"),
-            key: identity.public_key,
-            id: None,
-        });
+        for kind in roles {
+            let usage = match kind {
+                Github::Auth => seccy_core::config::Use::SshAuth,
+                Github::Signing => seccy_core::config::Use::SshSign,
+            };
+            anyhow::ensure!(
+                identity.permits(usage),
+                "key use does not permit requested GitHub role"
+            );
+            desired.push(Key {
+                kind,
+                title: format!("{prefix}{name}"),
+                key: identity.public_key.clone(),
+                id: None,
+            });
+        }
     }
     let mut remote = client.list(Github::Auth)?;
     remote.extend(client.list(Github::Signing)?);

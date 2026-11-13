@@ -11,7 +11,6 @@ use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -29,78 +28,15 @@ impl Mode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct KeyConfig {
-    pub mode: Mode,
-    pub github: Option<Github>,
-    pub email: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Github {
-    Signing,
-    Auth,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Config {
-    pub log_level: Option<String>,
-    pub email: Option<String>,
-    #[serde(default)]
-    pub keys: BTreeMap<String, KeyConfig>,
-}
-
-impl Config {
-    pub fn parse(text: &str) -> Result<Self> {
-        let config: Self = toml::from_str(text).context("invalid configuration TOML")?;
-        validate_email(config.email.as_deref(), "email")?;
-        ensure!(config.keys.len() <= 128, "at most 128 keys are supported");
-        for (name, key) in &config.keys {
-            ensure!(
-                !name.is_empty()
-                    && name.len() <= 64
-                    && name
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c)),
-                "key name must contain 1–64 ASCII letters, digits, underscores or hyphens: {name}"
-            );
-            validate_email(key.email.as_deref(), &format!("keys.{name}.email"))?;
-        }
-        Ok(config)
-    }
-
-    pub fn load(path: &Path) -> Result<Self> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => Self::parse(&text).with_context(|| format!("load {}", path.display())),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
-        }
-    }
-
-    /// Per-key override, then the default. No email means use the key name.
-    pub fn effective_email(&self, name: &str) -> Option<&str> {
-        self.keys
-            .get(name)
-            .and_then(|key| key.email.as_deref())
-            .or(self.email.as_deref())
-    }
-}
-
-fn validate_email(email: Option<&str>, field: &str) -> Result<()> {
-    if let Some(email) = email {
-        ensure!(
-            !email.is_empty() && !email.chars().any(|c| c.is_whitespace() || c.is_control()),
-            "{field} must be nonempty and contain no whitespace or control characters"
-        );
-    }
-    Ok(())
-}
+pub mod config;
+pub use config::{Config, Github, KeyConfig};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Identity {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(rename = "use", skip_serializing_if = "Option::is_none")]
+    pub uses: Option<config::Many<config::Use>>,
     pub name: String,
     pub mode: Mode,
     pub public_key: String,
@@ -110,6 +46,16 @@ pub struct Identity {
 }
 
 impl Identity {
+    fn prompt_name(&self) -> String {
+        self.display_name
+            .as_ref()
+            .map_or_else(|| self.name.clone(), |n| format!("{} ({n})", self.name))
+    }
+
+    pub fn permits(&self, usage: config::Use) -> bool {
+        self.uses.as_ref().is_none_or(|u| u.0.contains(&usage))
+    }
+
     pub fn managed_secret_description(&self, name: &str, caller: &Caller) -> String {
         let name = prompt::value(name);
         let heading = match self.mode {
@@ -118,7 +64,7 @@ impl Identity {
         };
         caller.request(
             &heading,
-            &self.name,
+            &self.prompt_name(),
             &format!("to decrypt secret {name}"),
             self.mode,
         )
@@ -130,7 +76,7 @@ impl Identity {
         caller: &Caller,
         payload: &payload::Payload,
     ) -> String {
-        payload.prompt(&self.name, caller, self.mode)
+        payload.prompt(&self.prompt_name(), caller, self.mode)
     }
 
     pub fn decrypt_description(&self, _algorithm: &str, caller: &Caller) -> String {
@@ -139,7 +85,7 @@ impl Identity {
                 Mode::Prompt => "Decrypt a secret?",
                 Mode::Notify => "Secret decrypted.",
             },
-            &self.name,
+            &self.prompt_name(),
             "to decrypt a secret",
             self.mode,
         )
@@ -165,6 +111,8 @@ impl Identity {
         agent::string(&mut blob, b"nistp256");
         agent::string(&mut blob, point);
         Ok(Self {
+            display_name: None,
+            uses: None,
             name: name.into(),
             mode,
             public_key: format!("ecdsa-sha2-nistp256 {} {name}", STANDARD.encode(&blob)),

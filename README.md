@@ -162,7 +162,9 @@ can take several minutes or longer.
 
 Create `$XDG_CONFIG_HOME/seccy/config.toml`, or `~/.config/seccy/config.toml`
 when `XDG_CONFIG_HOME` is unset, empty, or relative. Create the `seccy` directory
-if needed. This is the sole configuration file, independent of the working directory:
+if needed. Its optional `config.local.toml` companion overrides matching fields.
+Use `--config PATH` (`-c`) to select a different base file. Key configuration is
+independent of the working directory; see [providers and configuration](docs/providers.md).
 
 ```toml
 log_level = "info"
@@ -190,7 +192,9 @@ Provisioning records keys in `$XDG_STATE_HOME/seccy/state.toml` (default
 email/comment, and absolute source `config` path. `list`, `get`, `sync`, and
 `provision` use this inventory even when the original config is unavailable.
 The user `config.toml` contributes additional entries;
-registered entries take precedence. Missing config files contribute no entries.
+registered entries take precedence for identity and metadata. Current source configuration
+can narrow permitted operations; provider or mode changes require migration and are rejected.
+Missing config files contribute no entries.
 Malformed or unreadable configs remain errors for commands that consume them.
 With neither registry entries nor config entries, results are empty.
 
@@ -307,8 +311,7 @@ Run `seccy provision` to register or reuse those keys and update their recorded
 source to the global path. Keys absent from the merged file remain registered.
 Key provisioning ignores local `seccy.toml` files, even when malformed; it does not
 search the current directory or its parents. The separate `seccy secrets` commands
-read those files for managed secrets; see [managed secrets](docs/secrets.md). Remove old `--config` arguments and fnox
-`options.config` settings, then run `seccy fnox init` to update the plugin.
+read those files for managed secrets; see [managed secrets](docs/secrets.md). Remove obsolete fnox `options.config` settings, then run `seccy fnox init` to update the plugin.
 Reinstall the login service after changing `XDG_CONFIG_HOME` so it captures the
 resolved location.
 

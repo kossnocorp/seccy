@@ -60,16 +60,18 @@ fn inventory_survives_missing_source_and_merges_user_config() {
         .create(&paths.state)
         .unwrap();
     let mut state = seccy_core::state::State::default();
-    state.overlay(
-        &seccy_core::Config::parse("[keys.seccy_inventory_missing_fixture]\nmode='notify'")
-            .unwrap(),
-        &dir.path().join("deleted-source.toml"),
-    );
+    state
+        .overlay(
+            &seccy_core::Config::parse(&inventory_config("seccy_inventory_missing_fixture"))
+                .unwrap(),
+            &dir.path().join("deleted-source.toml"),
+        )
+        .unwrap();
     state.save(&paths).unwrap();
     std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
     std::fs::write(
         &paths.config,
-        "[keys.seccy_inventory_config_fixture]\nmode='notify'",
+        inventory_config("seccy_inventory_config_fixture"),
     )
     .unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_seccy"))
@@ -361,7 +363,7 @@ fn user_config_is_independent_of_cwd_and_local_files() {
                     }
                     command.output().unwrap()
                 };
-                std::fs::write(&config, "[keys.seccy_global_fixture]\nmode='notify'").unwrap();
+                std::fs::write(&config, inventory_config("seccy_global_fixture")).unwrap();
                 let output = run();
                 assert!(output.status.success(), "{output:?}");
                 let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -388,20 +390,25 @@ fn user_config_is_independent_of_cwd_and_local_files() {
 }
 
 #[test]
-fn config_path_option_is_removed_from_parser_and_help() {
-    let help = Command::new(env!("CARGO_BIN_EXE_seccy"))
-        .arg("--help")
-        .output()
-        .unwrap();
-    assert!(help.status.success());
-    assert!(!String::from_utf8_lossy(&help.stdout).contains("--config"));
-    let output = Command::new(env!("CARGO_BIN_EXE_seccy"))
-        .args(["--json", "--config", "/unused/config.toml", "list"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["ok"], false);
+fn config_path_override_and_inspection_are_available_without_hardware() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("custom.toml");
+    std::fs::write(&config, "[keys.portable]\nkind='piv'\nuse='secrets'").unwrap();
+    for flag in ["--config", "-c", "--c"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_seccy"))
+            .args(["config", "inspect", "--json", flag])
+            .arg(&config)
+            .env("HOME", dir.path())
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
+            .env("XDG_STATE_HOME", dir.path().join("state"))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["keys"][0]["provider"]["kind"], "piv");
+        assert_eq!(value["keys"][0]["available"], false);
+        assert_eq!(value["sources"][0], config.to_str().unwrap());
+    }
 }
 
 #[test]
@@ -484,4 +491,9 @@ fn log_file_is_private_and_does_not_pollute_json_stdout() {
             assert!(!file.exists());
         }
     }
+}
+
+fn inventory_config(name: &str) -> String {
+    let kind = seccy_core::config::platform_kind();
+    format!("provider='{kind}'\n[keys.{name}]\nmode='prompt'\n")
 }

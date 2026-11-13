@@ -64,6 +64,58 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn policy_changes_fail_before_creation_and_permissions_cannot_expand_live() {
+        use seccy_core::config::Use;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
+        fs::create_dir_all(&paths.state).unwrap();
+        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+        let original = "[keys.auth]\nuse='ssh-auth'\n";
+        fs::write(&paths.config, original).unwrap();
+        let store = Store::default();
+        let mut state = State::default();
+        provision(
+            &store,
+            &Config::parse(original).unwrap(),
+            &paths.config,
+            &paths,
+            &mut state,
+        )
+        .unwrap();
+        let before = fs::read(paths.state.join("state.toml")).unwrap();
+        // An earlier-sorted new key must not be created before discovering drift.
+        let changed = "[keys.aaa]\nuse='ssh-auth'\n[keys.auth]\nmode='notify'\nuse='ssh-auth'\n";
+        let error = provision(
+            &store,
+            &Config::parse(changed).unwrap(),
+            &paths.config,
+            &paths,
+            &mut state,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("migration_required"));
+        assert_eq!(store.0.lock().unwrap().len(), 1);
+        assert_eq!(fs::read(paths.state.join("state.toml")).unwrap(), before);
+        fs::write(&paths.config, "[keys.auth]\nuse=['ssh-auth','ssh-sign']\n").unwrap();
+        let identity = state.identity(&store, "auth").unwrap().unwrap();
+        assert!(identity.permits(Use::SshAuth));
+        assert!(!identity.permits(Use::SshSign));
+        fs::write(&paths.config, "[keys.auth]\nuse='ssh-sign'\n").unwrap();
+        let identity = state.identity(&store, "auth").unwrap().unwrap();
+        assert!(!identity.permits(Use::SshAuth));
+        assert!(!identity.permits(Use::SshSign));
+        fs::write(&paths.config, changed).unwrap();
+        assert!(
+            state
+                .identity(&store, "auth")
+                .unwrap_err()
+                .to_string()
+                .contains("migration_required")
+        );
+    }
+
+    #[test]
     fn reprovision_persists_effective_emails_without_recreating_keys() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
@@ -74,6 +126,10 @@ mod tests {
             "email='personal@example.com'\n[keys.personal]\nmode='notify'\n[keys.work]\nmode='prompt'\nemail='work@example.com'",
         )
         .unwrap();
+        if cfg!(target_os = "linux") {
+            config.provider = Some(seccy_core::config::Selector::Named("tpm-fido2-hmac".into()));
+            config.keys.get_mut("personal").unwrap().mode = Some(Mode::Prompt);
+        }
         let mut state = State::default();
         let output = provision(&store, &config, &source, &paths, &mut state).unwrap();
         assert!(output.iter().all(|entry| entry["created"] == true));
@@ -139,9 +195,10 @@ mod tests {
 
             // list/get and sync consume stored comments even when the current
             // configuration has changed, until provision explicitly updates it.
-            let changed =
+            let mut changed =
                 Config::parse("email='ignored@example.com'\n[keys.work]\nmode='prompt'").unwrap();
-            state.overlay(&changed, &source);
+            changed.provider = config.provider.clone();
+            state.overlay(&changed, &source).unwrap();
             let identity = state.identity(&store, "work").unwrap().unwrap();
             assert!(identity.public_key.ends_with(&format!(" {work}")));
             fs::remove_file(paths.public_key("work")).unwrap();
@@ -227,7 +284,7 @@ pub fn read_lock(paths: &Paths) -> Result<File> {
 pub fn view(paths: &Paths, config: &Config, source: &Path) -> Result<State> {
     let mut state = State::load(paths)?;
     let source = absolute_source(source)?;
-    state.overlay(config, &source);
+    state.overlay(config, &source)?;
     log_view(&state, config, &source)?;
     Ok(state)
 }
@@ -293,15 +350,21 @@ fn provision(
 ) -> Result<Vec<serde_json::Value>> {
     let source = absolute_source(source)?;
     for (name, key) in &config.keys {
+        let policy = config.resolve(name)?;
+        policy.ensure_available()?;
+        anyhow::ensure!(
+            key.bind.is_none(),
+            "existing machine providers do not accept portable bind"
+        );
         if let Some(old) = state.keys.get(name) {
             ensure!(
-                old.mode == key.mode,
-                "key {name} mode changed; remove it before reprovisioning"
+                old.mode == policy.mode && old.policy.as_ref().is_none_or(|p| p == &policy),
+                "migration_required: key {name} provider or mode changed; preserve the old key and migrate explicitly"
             );
         }
     }
     let mut targets = state.clone();
-    targets.overlay(config, &source);
+    targets.overlay(config, &source)?;
     log_view(&targets, config, &source)?;
     let mut output = Vec::new();
     for (name, record) in &targets.keys {
@@ -315,6 +378,46 @@ fn provision(
         state.keys.insert(
             name.clone(),
             Record {
+                display_name: config
+                    .keys
+                    .get(name)
+                    .and_then(|k| k.name.clone())
+                    .or_else(|| record.display_name.clone()),
+                policy: Some(
+                    config
+                        .keys
+                        .get(name)
+                        .map(|_| config.resolve(name))
+                        .transpose()?
+                        .unwrap_or_else(|| {
+                            record
+                                .policy
+                                .clone()
+                                .unwrap_or(seccy_core::config::Resolved {
+                                    kind: seccy_core::config::platform_kind().into(),
+                                    mode: record.mode,
+                                    auth: None,
+                                    verify: None,
+                                    slot: None,
+                                    algorithm: None,
+                                })
+                        }),
+                ),
+                uses: config.keys.get(name).map_or_else(
+                    || record.uses.clone(),
+                    |k| k.uses.clone().or_else(|| record.uses.clone()),
+                ),
+                github_roles: config
+                    .keys
+                    .get(name)
+                    .map(|k| k.github_roles())
+                    .or_else(|| record.github_roles.clone()),
+                secrets: record.secrets
+                    && config
+                        .keys
+                        .get(name)
+                        .and_then(|k| k.uses.as_ref())
+                        .is_none_or(|u| u.0.contains(&seccy_core::config::Use::Secrets)),
                 config: if config.keys.contains_key(name) {
                     source.clone()
                 } else {
@@ -390,7 +493,7 @@ pub fn run(
         }
         Commands::List(_) | Commands::Get(_) | Commands::Sync(_) => {
             let source = absolute_source(source)?;
-            state.overlay(config, &source);
+            state.overlay(config, &source)?;
             log_view(&state, config, &source)?;
             if let Commands::Get(args) = command {
                 let info = reported_info(&state, paths, config, &source, &args.name)?;
