@@ -85,7 +85,7 @@ pub fn run(socket: Option<PathBuf>, output: &crate::Output) -> Result<()> {
     let secrets_listener = bind(&secrets_socket)?;
     let _secrets_guard = SocketGuard(secrets_socket.clone());
     let keys = Arc::new(super::inventory::Cached::default());
-    let key_count = keys.keys()?.1.len();
+    let key_count = keys.keys(false)?.1.len();
     let stopped = Arc::new(AtomicBool::new(false));
     let signal = stopped.clone();
     ctrlc::set_handler(move || signal.store(true, Ordering::Relaxed))?;
@@ -215,7 +215,7 @@ fn serve(
                 "socket peer PID was reused"
             );
         }
-        let (_state_lock, current_keys) = keys.keys()?;
+        let (_state_lock, current_keys) = keys.keys(false)?;
         let response = match agent::respond(&platform::Store, &current_keys, &caller, &request) {
             Ok(response) => response,
             Err(error) => {

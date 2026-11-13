@@ -83,6 +83,8 @@ enum Commands {
     Fnox(FnoxArgs),
     /// Idempotently create configured hardware-backed keys
     Provision(Empty),
+    /// Replace a key generation under the same name; preserve the old decryption key
+    Rebuild(RebuildArgs),
     /// List registered and user-config keys with their status and source
     List(Empty),
     /// Show information for a registered or user-config key
@@ -96,7 +98,7 @@ enum Commands {
     /// Decrypt ciphertext from stdin through the running agent
     Decrypt(SecretArgs),
     /// Check the running agent and selected encryption key without a private operation
-    CryptoCheck(SecretArgs),
+    CryptoCheck(CheckArgs),
     /// Delete a key from the registry, public files, and Keychain
     Remove(RemoveArgs),
     /// Delete all seccy keys and registry entries; preserve source configs
@@ -211,6 +213,18 @@ enum ServiceCommand {
 struct Empty {}
 
 #[derive(Args)]
+struct RebuildArgs {
+    /// Existing registered key; omit to rebuild all active registered keys
+    name: Option<String>,
+    /// Explicitly change authorization mode when rebuilding (prompt or notify)
+    #[usage(long)]
+    mode: Option<String>,
+    /// Skip confirmation of alias replacement
+    #[usage(short = 'y', long)]
+    yes: bool,
+}
+
+#[derive(Args)]
 struct KeyArgs {
     /// Configured key name
     name: String,
@@ -221,6 +235,16 @@ struct AgentArgs {
     /// Socket path; parent directory must be private and owned by you
     #[usage(long)]
     socket: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct CheckArgs {
+    name: String,
+    #[usage(long)]
+    socket: Option<PathBuf>,
+    /// Perform an encryption/decryption round trip (prompts for Touch ID)
+    #[usage(long)]
+    verify: bool,
 }
 
 #[derive(Args)]
@@ -432,6 +456,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),
         Commands::Provision(_) => "provision",
+        Commands::Rebuild(_) => "rebuild",
         Commands::List(_) => "list",
         Commands::Get(_) => "get",
         Commands::Sync(_) => "sync",
@@ -451,6 +476,7 @@ fn run(app: App, output: &Output) -> Result<()> {
             | Commands::Service(_)
             | Commands::Remove(_)
             | Commands::Reset(_)
+            | Commands::Rebuild(_)
             | Commands::Decrypt(_)
             | Commands::CryptoCheck(_)
     ) {
@@ -484,6 +510,7 @@ fn run_platform(
         Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),
         command @ (Commands::Provision(_)
+        | Commands::Rebuild(_)
         | Commands::List(_)
         | Commands::Get(_)
         | Commands::Sync(_)
@@ -513,8 +540,14 @@ fn run_platform(
         }
         Commands::Decrypt(args) => secrets::decrypt(args, output)?,
         Commands::CryptoCheck(args) => {
-            let value = secrets::request(args.socket, "check", &args.name, None)?;
-            emit(output, value, "Encryption key and agent are ready")?;
+            let operation = if args.verify { "verify" } else { "check" };
+            let value = secrets::request(args.socket, operation, &args.name, None)?;
+            let message = if args.verify {
+                "Private-key encryption/decryption verified"
+            } else {
+                "Agent and encryption capability available; private-key access untested. Use crypto-check <key> --verify."
+            };
+            emit(output, value, message)?;
         }
     }
     Ok(())

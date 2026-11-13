@@ -198,20 +198,37 @@ Missing config files contribute no entries.
 Malformed or unreadable configs remain errors for commands that consume them.
 With neither registry entries nor config entries, results are empty.
 
-`list` and `get` report `status` (`provisioned` or `not_provisioned`), `mode`, `public_key_path`, `public_key`, `fingerprint`, `synced`, and `config` (also shown in the Config column). Source paths are absolute, shortened to `~/…` when inside home. Provisioned registered keys show their provisioning source. Unprovisioned keys show the current config when it defines them, otherwise their recorded source. Missing key material is reported as null rather than failing the command. Actual keychain access errors remain errors. The agent advertises only provisioned, registered keys.
+`list` and `get` report `status` (`provisioned` or `not_provisioned`), `mode`, `public_key_path`, `public_key`, `fingerprint`, `synced`, and `config` (also shown in the Config column). Source paths are absolute, shortened to `~/…` when inside home. Provisioned registered keys show their provisioning source. Unprovisioned keys show the current config when it defines them, otherwise their recorded source. Missing key material is reported as null rather than failing the command. Actual keychain access errors remain errors. The agent advertises only provisioned, active registered keys. Retired generations remain available for decryption and are reported with `retired: true` and their original `alias`.
 
-Provisioning is idempotent by key name and mode, within the signed app's keychain group. It creates missing keys and persists their public files and registry records. Existing private keys are reused. `sync` writes missing/outdated public files for existing keys without creating private keys; unprovisioned keys are reported and skipped. Public-key comments use the key's `email`, then the top-level `email`, then the key name when neither is set. Both email fields are optional; when present they must be nonempty and contain no whitespace or control characters. The old `[user]` configuration table is rejected.
+Provisioning is idempotent by key name and mode, within the signed app's keychain group. It creates new configured keys and persists their public files and registry records. Missing hardware for an already recorded identity requires explicit rebuilding. Existing private keys are reused. `sync` writes missing/outdated public files for existing keys without creating private keys; unprovisioned keys are reported and skipped. Public-key comments use the key's `email`, then the top-level `email`, then the key name when neither is set. Both email fields are optional; when present they must be nonempty and contain no whitespace or control characters. The old `[user]` configuration table is rejected.
 
 Provisioning stores each key's resolved email. Changing or removing an override and running `provision` updates the stored comment and public file using those fallback rules, without changing the private key or fingerprint. Until reprovisioning, registry-backed `list`, `get`, `sync`, and the agent retain the stored comments, even if the source config changes or disappears. Identical public files are left untouched; replacements and registry writes are atomic.
 
-Changing a registered key's mode is rejected. Choose another name, or explicitly
-remove the old key first.
+Changing a registered key's mode requires explicit replacement:
+`seccy rebuild personal --mode prompt` (or `notify`). Update the source config
+to match. The logical name stays the same; the old generation is retained.
 A failed multi-key provision may have completed earlier keys; rerun it to finish.
 Removing an entry from a source config does not remove it from the registry.
 If a registered private key is missing, `list` reports `not_provisioned` and
-`provision` creates a replacement. That replacement has a new identity and cannot
-decrypt ciphertext encrypted for the old key. A missing `.pub` file alone is
+`provision` refuses to silently create a replacement. Use `seccy rebuild NAME`
+to create a new generation. It cannot decrypt ciphertext addressed only to the old key. A missing `.pub` file alone is
 recreated from the existing private key by `sync` or `provision`.
+
+New physical bindings use full SHA-256 IDs, independent of the reusable name.
+Generation public files live in `keys/generations/key_<full-hash>.pub`;
+`keys/personal.pub` continues to follow the active generation, preserving SSH/Git
+configuration paths. JSON inventory includes `storage_id` and
+`generation_public_key_path`. Legacy Keychain/vault bindings remain readable.
+`seccy rebuild` confirms once before rebuilding all active registered keys;
+`seccy rebuild personal` targets one key. Each replacement creates a fresh generation, atomically switches the
+registry alias, and updates the public files. The prior generation remains in
+the registry under its full key ID; it is not advertised for SSH or synced to
+GitHub. Retained keys are not automatically deleted, even after re-encryption.
+Use `seccy remove <retired-key-id>` only after all ciphertext has been migrated.
+If a public-file write fails after the registry switch, `seccy sync` repairs it.
+
+For Touch ID enrollment changes and secret recovery, see
+[recovery instructions](docs/secrets.md#touch-id-changes-and-recovery).
 
 ```sh
 seccy remove personal        # asks for confirmation, default No
@@ -688,7 +705,11 @@ seccy gh sync --cmd 'mise x gh@latest --' -y
 ```
 
 Sync lists both GitHub key types and manages titles matching
-`<whoami>@<hostname>/seccy/<key>`. It removes stale, duplicate, changed, or
+`<whoami>@<hostname>/seccy/<key>#<xxhash32>`, with an eight-character hex xxHash32
+of the full SSH public-key blob (seed zero). The short hash is only a title suffix:
+reconciliation compares complete public keys, and a title collision aborts before
+remote changes. Legacy titles without the suffix are migrated on sync.
+It removes stale, duplicate, changed, or
 wrong-type entries and adds missing keys. Public-key comments do not affect
 matching. The plan is printed before confirmation, including with `-y`/`--yes`.
 An unprovisioned selected key stops sync before remote changes.
@@ -762,9 +783,10 @@ registered keys. Both
 `decrypt` and `crypto-check` accept `--socket /absolute/path/to/secrets.sock`.
 
 `crypto-check` verifies agent connectivity, key presence, and ECIES capability
-without decrypting or prompting. To verify actual private-key authorization, run
-the round-trip above and compare with `cmp secret.txt recovered.txt`; repeat the
-decryption to check fresh Touch ID prompts, and cancel a prompt to verify failure.
+without decrypting or prompting; it reports `private_key_verified: false`.
+Use `seccy crypto-check secrets --verify` for a real encryption/decryption round
+trip through the agent, with fresh authorization. Success reports
+`private_key_verified: true`. This tests access now, not future recoverability.
 
 JSON encryption returns `{"ok":true,"value":"seccy:v1:..."}`. JSON decryption
 returns `{"ok":true,"value_base64":"..."}` to preserve binary data and trailing

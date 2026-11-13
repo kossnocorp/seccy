@@ -38,6 +38,10 @@ mod tests {
     struct Store(Mutex<BTreeMap<String, Identity>>);
 
     impl KeyStore for Store {
+        fn create_generation(&self, name: &str, mode: Mode) -> Result<Identity> {
+            Ok(self.provision(name, mode)?.0)
+        }
+
         fn provision(&self, name: &str, mode: Mode) -> Result<(Identity, bool)> {
             let mut keys = self.0.lock().unwrap();
             if let Some(key) = keys.get(name) {
@@ -61,6 +65,168 @@ mod tests {
         fn sign(&self, _: &Identity, _: &[u8], _: &Caller, _: &Payload) -> Result<Vec<u8>> {
             unreachable!()
         }
+    }
+
+    struct Generations(Store);
+    impl KeyStore for Generations {
+        fn create_generation(&self, name: &str, mode: Mode) -> Result<Identity> {
+            use p256::elliptic_curve::sec1::ToEncodedPoint;
+            let mut keys = self.0.0.lock().unwrap();
+            let count = keys.len() as u8 + 1;
+            let public = p256::SecretKey::from_slice(&[count; 32])?.public_key();
+            let mut identity =
+                Identity::new(name, mode, public.to_encoded_point(false).as_bytes())?;
+            identity.storage_id = identity.key_id();
+            keys.insert(identity.storage_id.clone(), identity.clone());
+            Ok(identity)
+        }
+        fn provision(&self, name: &str, mode: Mode) -> Result<(Identity, bool)> {
+            Ok((
+                self.identity(name, mode)?.context("missing generation")?,
+                false,
+            ))
+        }
+        fn identity(&self, name: &str, mode: Mode) -> Result<Option<Identity>> {
+            self.0.identity(name, mode)
+        }
+        fn sign(&self, _: &Identity, _: &[u8], _: &Caller, _: &Payload) -> Result<Vec<u8>> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn rebuild_reuses_alias_preserves_legacy_and_generations_and_supports_mode_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
+        fs::create_dir_all(&paths.state).unwrap();
+        let store = Generations(Store::default());
+        let config = Config::parse(&format!(
+            "provider='{}'\n[keys.auth]\nmode='prompt'",
+            seccy_core::config::platform_kind()
+        ))
+        .unwrap();
+        let mut state = State::default();
+        provision(&store, &config, &paths.config, &paths, &mut state).unwrap();
+        // Model a pre-generation installation: key physically stored under auth.
+        let first = state.identity(&store, "auth").unwrap().unwrap();
+        let mut legacy = first.clone();
+        legacy.storage_id = "auth".into();
+        store.0.0.lock().unwrap().remove(&first.storage_id);
+        store.0.0.lock().unwrap().insert("auth".into(), legacy);
+        let record = state.keys.get_mut("auth").unwrap();
+        record.storage_id = None;
+        record.secrets = true;
+        let (second, retired) = rebuild(&store, &mut state, "auth", None).unwrap();
+        assert_eq!(second.name, "auth");
+        assert_ne!(first.fingerprint, second.fingerprint);
+        assert!(state.keys[&retired].retired);
+        assert!(state.keys[&retired].secrets);
+        assert_eq!(state.keys[&retired].storage_id.as_deref(), Some("auth"));
+        assert!(!state.keys["auth"].secrets);
+        assert_eq!(
+            state
+                .identity(&store, &retired)
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            first.fingerprint
+        );
+        state.save(&paths).unwrap();
+        state = State::load(&paths).unwrap();
+        sync_public_key(&second, &paths).unwrap();
+        assert_eq!(
+            fs::read_to_string(paths.public_key("auth")).unwrap(),
+            format!("{}\n", second.public_key)
+        );
+        assert!(paths.generation_public_key(&first).exists());
+        assert!(paths.generation_public_key(&second).exists());
+        let (third, retired_second) =
+            rebuild(&store, &mut state, "auth", Some(Mode::Notify)).unwrap();
+        assert_ne!(third.storage_id, second.storage_id);
+        assert_eq!(third.mode, Mode::Notify);
+        assert_eq!(
+            state
+                .identity(&store, &retired_second)
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            second.fingerprint
+        );
+        assert_eq!(state.keys.len(), 3);
+        let before = serde_json::to_value(&state).unwrap();
+        assert!(rebuild(&store, &mut state, &retired, None).is_err());
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        // A missing physical key must never be silently replaced by provision.
+        store.0.0.lock().unwrap().remove(&third.storage_id);
+        assert!(
+            provision(
+                &store,
+                &Config::default(),
+                &paths.config,
+                &paths,
+                &mut state
+            )
+            .is_err()
+        );
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        // Reusing a removed alias must not reactivate a retained legacy key.
+        state.keys.remove("auth");
+        state.overlay(&config, &paths.config).unwrap();
+        assert!(state.identity(&store, "auth").unwrap().is_none());
+        provision(&store, &config, &paths.config, &paths, &mut state).unwrap();
+        assert_ne!(state.keys["auth"].fingerprint, Some(first.fingerprint));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn rebuild_all_selects_active_keys_once_and_preserves_modes() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
+        fs::create_dir_all(&paths.state).unwrap();
+        let store = Generations(Store::default());
+        let config =
+            Config::parse("[keys.auth]\nmode='prompt'\n[keys.signing]\nmode='notify'").unwrap();
+        let mut state = State::default();
+        provision(&store, &config, &paths.config, &paths, &mut state).unwrap();
+        let (_, old) = rebuild(&store, &mut state, "auth", None).unwrap();
+        let targets = rebuild_targets(&state, None).unwrap();
+        assert_eq!(targets, ["auth", "signing"]);
+        assert_eq!(
+            rebuild_targets(&state, Some("signing")).unwrap(),
+            ["signing"]
+        );
+        assert!(rebuild_targets(&state, Some(&old)).is_err());
+        assert!(rebuild_targets(&state, Some("missing")).is_err());
+        for name in targets {
+            let mode = state.keys[&name].mode;
+            let (identity, _) = rebuild(&store, &mut state, &name, None).unwrap();
+            assert_eq!(identity.mode, mode);
+            state.save(&paths).unwrap();
+        }
+        let loaded = State::load(&paths).unwrap();
+        assert_eq!(loaded.keys.values().filter(|r| !r.retired).count(), 2);
+        assert_eq!(loaded.keys.values().filter(|r| r.retired).count(), 3);
+        assert!(rebuild_targets(&State::default(), None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn rebuild_creation_failure_keeps_original_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
+        fs::create_dir_all(&paths.state).unwrap();
+        let store = Store::default();
+        let config = Config::parse(&format!(
+            "provider='{}'\n[keys.auth]\nmode='prompt'",
+            seccy_core::config::platform_kind()
+        ))
+        .unwrap();
+        let mut state = State::default();
+        provision(&store, &config, &paths.config, &paths, &mut state).unwrap();
+        let before = serde_json::to_value(&state).unwrap();
+        // This fake store returns the same key: rebuild must reject it.
+        assert!(rebuild(&store, &mut state, "auth", None).is_err());
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
     }
 
     #[test]
@@ -228,7 +394,7 @@ pub struct Cached {
 impl Cached {
     /// Keep the returned shared lock alive through the operation. Writers cannot
     /// remove/reprovision keys while an authorized operation is in flight.
-    pub fn keys(&self) -> Result<(File, Vec<seccy_core::Identity>)> {
+    pub fn keys(&self, include_retired: bool) -> Result<(File, Vec<seccy_core::Identity>)> {
         use std::os::unix::fs::MetadataExt;
         let paths = Paths::from_env()?;
         let lock = read_lock(&paths)?;
@@ -257,8 +423,9 @@ impl Cached {
         let state = &cached.as_ref().context("missing state cache")?.1;
         let keys = state
             .keys
-            .keys()
-            .map(|name| state.identity(&platform::Store, name))
+            .iter()
+            .filter(|(_, record)| include_retired || !record.retired)
+            .map(|(name, _)| state.identity(&platform::Store, name))
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
@@ -358,6 +525,10 @@ fn provision(
         );
         if let Some(old) = state.keys.get(name) {
             ensure!(
+                !old.retired,
+                "configuration names a retired generation; use its active alias"
+            );
+            ensure!(
                 old.mode == policy.mode && old.policy.as_ref().is_none_or(|p| p == &policy),
                 "migration_required: key {name} provider or mode changed; preserve the old key and migrate explicitly"
             );
@@ -368,7 +539,39 @@ fn provision(
     log_view(&targets, config, &source)?;
     let mut output = Vec::new();
     for (name, record) in &targets.keys {
-        let (identity, created) = store.provision(name, record.mode)?;
+        if record.retired {
+            continue;
+        }
+        let binding = record.storage_id.as_deref().unwrap_or(name);
+        let legacy_is_retired = record.storage_id.is_none()
+            && record.fingerprint.is_none()
+            && state
+                .keys
+                .values()
+                .any(|r| r.retired && r.storage_id.as_deref() == Some(name));
+        let existing = if legacy_is_retired {
+            None
+        } else {
+            store.identity(binding, record.mode)?
+        };
+        let (identity, created) = if let Some(identity) = existing {
+            ensure!(
+                record
+                    .fingerprint
+                    .as_ref()
+                    .is_none_or(|f| f == &identity.fingerprint),
+                "key binding changed for {name}; refusing to use another key"
+            );
+            // Complete any backend-specific pending provisioning (not a replacement).
+            store.provision(binding, record.mode)?
+        } else {
+            ensure!(
+                record.fingerprint.is_none(),
+                "key {name} is missing; use seccy rebuild {name} for explicit replacement"
+            );
+            (store.create_generation(name, record.mode)?, true)
+        };
+        let identity = identity.with_name(name);
         let email = if config.keys.contains_key(name) {
             config.effective_email(name).map(str::to_owned)
         } else {
@@ -428,6 +631,7 @@ fn provision(
                     .keys
                     .get(name)
                     .map_or(record.github, |key| key.github),
+                storage_id: Some(identity.storage_id.clone()),
                 public_key: Some(identity.public_key.clone()),
                 fingerprint: Some(identity.fingerprint.clone()),
                 ..record.clone()
@@ -440,6 +644,96 @@ fn provision(
         output.push(json!({"key": info, "created": created, "updated": updated}));
     }
     Ok(output)
+}
+
+fn rebuild_targets(state: &State, selected: Option<&str>) -> Result<Vec<String>> {
+    let targets = match selected {
+        Some(name) => vec![name.to_owned()],
+        None => state
+            .keys
+            .iter()
+            .filter(|(_, record)| !record.retired)
+            .map(|(name, _)| name.clone())
+            .collect(),
+    };
+    // Validate the entire selection before creating the first key.
+    for name in &targets {
+        let record = state.keys.get(name).context("key is not registered")?;
+        ensure!(
+            !record.retired,
+            "cannot rebuild a retired generation; select its active alias"
+        );
+        let public = record
+            .public_key
+            .as_deref()
+            .context("key has no recorded public identity")?;
+        let old_id = seccy_core::identity_from_public(name, record.mode, public)?.key_id();
+        ensure!(
+            !state.keys.contains_key(&old_id),
+            "retained generation ID conflicts with an existing registry entry"
+        );
+    }
+    Ok(targets)
+}
+
+fn rebuild(
+    store: &impl KeyStore,
+    state: &mut State,
+    name: &str,
+    mode: Option<seccy_core::Mode>,
+) -> Result<(seccy_core::Identity, String)> {
+    let old = state
+        .keys
+        .get(name)
+        .context("key is not registered")?
+        .clone();
+    ensure!(
+        !old.retired,
+        "cannot rebuild a retired generation; select its active alias"
+    );
+    let public = old
+        .public_key
+        .as_deref()
+        .context("key has no recorded public identity")?;
+    let old_id = seccy_core::identity_from_public(name, old.mode, public)?.key_id();
+    ensure!(
+        !state.keys.contains_key(&old_id),
+        "retained generation ID conflicts with an existing registry entry"
+    );
+    let replacement_mode = mode.unwrap_or(old.mode);
+    ensure!(
+        replacement_mode != seccy_core::Mode::Notify
+            || (seccy_core::config::platform_kind() == "secure-enclave"
+                && old
+                    .uses
+                    .as_ref()
+                    .is_none_or(|u| !u.0.contains(&seccy_core::config::Use::Secrets))),
+        "notify mode is not supported for this provider or secrets usage"
+    );
+    let identity = store
+        .create_generation(name, replacement_mode)?
+        .with_name(name)
+        .with_email(old.email.as_deref());
+    ensure!(
+        Some(&identity.fingerprint) != old.fingerprint.as_ref(),
+        "backend did not create a fresh generation"
+    );
+    let mut retired = old.clone();
+    retired.storage_id = Some(old.storage_id.clone().unwrap_or_else(|| name.into()));
+    retired.retired = true;
+    retired.alias = Some(name.into());
+    let mut replacement = old;
+    replacement.storage_id = Some(identity.storage_id.clone());
+    replacement.mode = identity.mode;
+    if let Some(policy) = &mut replacement.policy {
+        policy.mode = identity.mode;
+    }
+    replacement.public_key = Some(identity.public_key.clone());
+    replacement.fingerprint = Some(identity.fingerprint.clone());
+    replacement.secrets = false;
+    state.keys.insert(old_id.clone(), retired);
+    state.keys.insert(name.into(), replacement);
+    Ok((identity, old_id))
 }
 
 pub fn run(
@@ -483,6 +777,69 @@ pub fn run(
     let store = platform::Store;
     let mut state = State::load(paths)?;
     match command {
+        Commands::Rebuild(args) => {
+            let mode = args
+                .mode
+                .as_deref()
+                .map(|mode| match mode {
+                    "prompt" => Ok(seccy_core::Mode::Prompt),
+                    "notify" => Ok(seccy_core::Mode::Notify),
+                    _ => anyhow::bail!("mode must be prompt or notify"),
+                })
+                .transpose()?;
+            let targets = rebuild_targets(&state, args.name.as_deref())?;
+            if targets.is_empty() {
+                return emit(
+                    output_mode,
+                    json!({"ok":true,"keys":[]}),
+                    "No active keys to rebuild",
+                );
+            }
+            confirm(
+                args.yes,
+                &format!(
+                    "Rebuild {} active key(s): {}? SSH/signing registrations must be updated. Old keys and ciphertext are preserved.",
+                    targets.len(),
+                    targets.join(", ")
+                ),
+            )?;
+            let mut results = Vec::new();
+            for name in &targets {
+                let result = (|| -> Result<serde_json::Value> {
+                    let (identity, retired) = rebuild(&store, &mut state, name, mode)?;
+                    // Persist each completed generation. Later failures never
+                    // undo an already completed replacement or delete old keys.
+                    state.save(paths)?;
+                    let retained = &state.keys[&retired];
+                    let old_public = seccy_core::identity_from_public(
+                        &retired, retained.mode,
+                        retained.public_key.as_deref().context("missing retained public key")?,
+                    )?.with_email(retained.email.as_deref());
+                    sync_public_key(&old_public, paths)?;
+                    sync_public_key(&identity, paths)?;
+                    Ok(json!({"ok":true,"key":name,"storage_id":identity.storage_id,
+                        "retired":retired,"public_key":identity.public_key,"fingerprint":identity.fingerprint}))
+                })().with_context(|| format!(
+                    "rebuild failed at {name}; completed keys: {}. Inspect seccy list and run seccy sync if needed; rebuild remaining keys by name to avoid rotating completed keys again",
+                    results.iter().filter_map(|v: &serde_json::Value| v["key"].as_str()).collect::<Vec<_>>().join(", ")
+                ))?;
+                results.push(result);
+            }
+            let value = if args.name.is_some() {
+                results.remove(0)
+            } else {
+                json!({"ok":true,"keys":results})
+            };
+            emit(
+                output_mode,
+                value,
+                &format!(
+                    "Rebuilt {}. Old generations retained. Update SSH/signing registrations (seccy gh sync for GitHub). Enroll replacement recipients, then reencrypt from working keys or use secrets reset.",
+                    targets.join(", ")
+                ),
+            )?;
+        }
+
         Commands::Provision(_) => {
             let output = provision(&store, config, source, paths, &mut state)?;
             emit(
@@ -529,7 +886,28 @@ pub fn run(
             }
         }
         Commands::Remove(args) => {
-            store.remove(&args.name)?;
+            if let Some(record) = state.keys.get(&args.name) {
+                if let Some(public) = &record.public_key {
+                    let identity =
+                        seccy_core::identity_from_public(&args.name, record.mode, public)?;
+                    let file = paths.generation_public_key(&identity);
+                    match fs::remove_file(file) {
+                        Ok(()) => (),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+                store.remove(record.storage_id.as_deref().unwrap_or(&args.name))?;
+            } else {
+                ensure!(
+                    !state
+                        .keys
+                        .values()
+                        .any(|r| r.storage_id.as_deref() == Some(&args.name)),
+                    "this physical key is retained under another registry entry; remove that generation explicitly"
+                );
+                store.remove(&args.name)?;
+            }
             remove_public(paths, &args.name)?;
             state.keys.remove(&args.name);
             state.save(paths)?;
@@ -541,6 +919,12 @@ pub fn run(
         }
         Commands::Reset(_) => {
             let mut names: std::collections::BTreeSet<_> = state.keys.keys().cloned().collect();
+            names.extend(
+                state
+                    .keys
+                    .values()
+                    .filter_map(|record| record.storage_id.clone()),
+            );
             names.extend(store.managed_names()?);
             match fs::read_dir(&paths.keys) {
                 Ok(entries) => {
@@ -567,6 +951,15 @@ pub fn run(
                 state.save(paths)?;
             }
             state.save(paths)?;
+            let generations = paths.keys.join("generations");
+            if generations.is_dir() {
+                for entry in fs::read_dir(&generations)? {
+                    let path = entry?.path();
+                    if path.extension().is_some_and(|e| e == "pub") {
+                        fs::remove_file(path)?;
+                    }
+                }
+            }
             emit(
                 output_mode,
                 json!({"ok": true}),

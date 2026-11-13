@@ -43,6 +43,12 @@ impl Paths {
         })
     }
 
+    pub fn generation_public_key(&self, identity: &Identity) -> PathBuf {
+        self.keys
+            .join("generations")
+            .join(format!("{}.pub", identity.key_id()))
+    }
+
     pub fn public_key(&self, name: &str) -> PathBuf {
         self.keys.join(format!("{name}.pub"))
     }
@@ -61,6 +67,10 @@ pub struct KeyInfo {
     #[serde(rename = "use")]
     pub uses: Option<crate::config::Many<crate::config::Use>>,
     pub display_name: Option<String>,
+    pub retired: bool,
+    pub alias: Option<String>,
+    pub storage_id: Option<String>,
+    pub generation_public_key_path: Option<PathBuf>,
     pub secrets: bool,
     pub config: Option<String>,
     pub name: String,
@@ -83,6 +93,10 @@ impl KeyInfo {
             provider: None,
             uses: identity.and_then(|i| i.uses.clone()),
             display_name: identity.and_then(|i| i.display_name.clone()),
+            retired: false,
+            alias: None,
+            storage_id: identity.map(|i| i.storage_id.clone()),
+            generation_public_key_path: identity.map(|i| paths.generation_public_key(i)),
             config: None,
             secrets: false,
             name: name.into(),
@@ -108,7 +122,7 @@ impl KeyInfo {
             "{}\t{}\t{}\t{}\t{}\t{}",
             self.name,
             self.mode.as_str(),
-            status,
+            if self.retired { "retired" } else { status },
             if self.synced { "synced" } else { "not_synced" },
             self.public_key_path.display(),
             self.config.as_deref().unwrap_or("-")
@@ -148,17 +162,24 @@ fn contents_match(path: &Path, expected: &str) -> Result<bool> {
 
 /// Atomically replace missing/outdated public files; leave identical files alone.
 pub fn sync_public_key(identity: &Identity, paths: &Paths) -> Result<bool> {
-    let path = paths.public_key(&identity.name);
     let content = format!("{}\n", identity.public_key);
-    if contents_match(&path, &content)? {
-        return Ok(false);
+    let mut updated = false;
+    for path in [
+        paths.generation_public_key(identity),
+        paths.public_key(&identity.name),
+    ] {
+        if contents_match(&path, &content)? {
+            continue;
+        }
+        let parent = path.parent().context("invalid public key path")?;
+        fs::create_dir_all(parent)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        temporary.write_all(content.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(&path)
+            .with_context(|| format!("write {}", path.display()))?;
+        updated = true;
     }
-    fs::create_dir_all(&paths.keys)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(&paths.keys)?;
-    temporary.write_all(content.as_bytes())?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist(&path)
-        .with_context(|| format!("write {}", path.display()))?;
-    Ok(true)
+    Ok(updated)
 }

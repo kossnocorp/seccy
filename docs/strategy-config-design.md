@@ -3,7 +3,8 @@
 Status: the configuration foundation is implemented. See [current provider support](providers.md)
 for the supported syntax, inspection commands, overlays and compatibility behavior.
 Secure Enclave and the existing Linux TPM/FIDO2-HMAC backend are connected to the resolver.
-New hardware providers, portable bindings, explicit key replacement and sessions below
+Same-provider key rebuilding and retained generations are implemented.
+New hardware providers, portable bindings, cross-provider replacement and sessions below
 remain planned. Naming a planned provider never enables it or falls back to another backend.
 
 ## Recommendation

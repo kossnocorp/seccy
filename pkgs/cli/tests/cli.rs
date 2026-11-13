@@ -497,3 +497,94 @@ fn inventory_config(name: &str) -> String {
     let kind = seccy_core::config::platform_kind();
     format!("provider='{kind}'\n[keys.{name}]\nmode='prompt'\n")
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn crypto_check_verification_is_explicit_and_passed_to_agent() {
+    use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+    for verify in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("secrets.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = seccy_core::agent::read_frame(&mut stream).unwrap().unwrap();
+            let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+            assert_eq!(
+                request["operation"],
+                if verify { "verify" } else { "check" }
+            );
+            assert!(request["value"].is_null());
+            seccy_core::agent::write_frame(
+                &mut stream,
+                &serde_json::to_vec(&serde_json::json!({"ok":true,"private_key_verified":verify}))
+                    .unwrap(),
+            )
+            .unwrap();
+        });
+        let mut command = Command::new(env!("CARGO_BIN_EXE_seccy"));
+        command
+            .args(["crypto-check", "secrets", "--socket"])
+            .arg(socket)
+            .env("XDG_CONFIG_HOME", dir.path().join("config"))
+            .env("XDG_STATE_HOME", dir.path().join("state"));
+        if verify {
+            command.arg("--verify");
+        }
+        let output = command.output().unwrap();
+        server.join().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains(if verify { "verified" } else { "untested" }));
+    }
+}
+
+#[test]
+fn rebuild_all_requires_confirmation_before_any_hardware_operation() {
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let paths = seccy_core::storage::Paths::resolve(Some(dir.path()), |_| None).unwrap();
+    std::fs::create_dir_all(&paths.state).unwrap();
+    std::fs::set_permissions(&paths.state, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut state = seccy_core::state::State::default();
+    state
+        .overlay(
+            &seccy_core::Config::parse(&inventory_config("auth")).unwrap(),
+            &paths.config,
+        )
+        .unwrap();
+    let public = p256::SecretKey::from_slice(&[1; 32]).unwrap().public_key();
+    let identity = seccy_core::Identity::new(
+        "auth",
+        seccy_core::Mode::Prompt,
+        public.to_encoded_point(false).as_bytes(),
+    )
+    .unwrap();
+    state.keys.get_mut("auth").unwrap().public_key = Some(identity.public_key);
+    state.keys.get_mut("auth").unwrap().fingerprint = Some(identity.fingerprint);
+    state.save(&paths).unwrap();
+    let before = std::fs::read(paths.state.join("state.toml")).unwrap();
+    for selected in [None, Some("auth")] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_seccy"));
+        cmd.args(["rebuild", "--json"])
+            .env("HOME", dir.path())
+            .env("XDG_CONFIG_HOME", dir.path().join(".config"))
+            .env("XDG_STATE_HOME", dir.path().join(".local/state"))
+            .stdin(std::process::Stdio::null());
+        if let Some(name) = selected {
+            cmd.arg(name);
+        }
+        let output = cmd.output().unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("confirmation requires a terminal"),
+            "{output:?}"
+        );
+        assert_eq!(
+            std::fs::read(paths.state.join("state.toml")).unwrap(),
+            before
+        );
+    }
+}

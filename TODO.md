@@ -26,7 +26,8 @@
 - [ ] Add OpenPGP support; distinguish OpenPGP-format Git signatures from SSHSIG. Validate per-slot confirmation and middleware caching behavior.
 - [ ] Enforce PIN verification plus fresh touch, or fresh fingerprint, for every relevant private operation. Disable consent caches/batching in strict profiles. PIN re-verification does not prove fresh human typing; hosts can cache PINs. Never silently fall back to weaker authorization or software keys.
 - [ ] Validate backend + authorization + hardware/firmware + algorithm + mode at config load/provision/use, returning actionable errors. Detect Bio FIDO vs Bio Multi-protocol; do not infer capability from marketing names. Strict profiles must reject notify-only operation.
-- [ ] Include public-key fingerprints in GitHub titles and physical storage identifiers. Separate human aliases from immutable key identity; support alias reuse and explicit replacement when backend/mode changes. Preserve old decryption keys until ciphertext migration succeeds; never silently destroy access.
+- [x] Separate reusable aliases from immutable SHA-256 physical key IDs; add same-name rebuilding with explicit mode changes, retain old decryption generations, and identify GitHub titles with short xxHash32 suffixes while comparing full public keys.
+- [ ] Extend explicit replacement to backend changes once backend/authorization strategies are implemented. Validate generation creation and recovery on real Secure Enclave and TPM/FIDO hardware, including biometric enrollment changes; mocks cannot establish hardware enforcement.
 - [ ] Keep FIDO-encrypted software private keys outside strict profiles: they expose the private key in RAM. PRF-based symmetric encryption also does not provide public-recipient-only encryption. Track weaker optional profiles separately if ever added.
 
 ## Secrets

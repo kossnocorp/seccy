@@ -118,7 +118,7 @@ impl SecureEnclave {
         use security_framework_sys::key::{
             SecKeyIsAlgorithmSupported, kSecKeyOperationTypeDecrypt, kSecKeyOperationTypeEncrypt,
         };
-        let key = lookup(&expected.name, expected.mode)?.context("key no longer exists")?;
+        let key = lookup(&expected.storage_id, expected.mode)?.context("key no longer exists")?;
         ensure!(
             identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
             "key changed; restart agent"
@@ -147,7 +147,7 @@ impl SecureEnclave {
     /// Public-key encryption requires no biometric authorization.
     pub fn encrypt(&self, expected: &Identity, plaintext: &[u8]) -> Result<String> {
         ensure!(plaintext.len() <= MAX_SECRET_BYTES, "secret exceeds 64 KiB");
-        let key = lookup(&expected.name, expected.mode)?.context("key no longer exists")?;
+        let key = lookup(&expected.storage_id, expected.mode)?.context("key no longer exists")?;
         ensure!(
             identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
             "key changed; restart agent"
@@ -187,15 +187,20 @@ impl SecureEnclave {
         let result = (|| {
             let mut plaintexts = Vec::new();
             for ((expected, _, _), ciphertext) in items.iter().zip(ciphertexts) {
-                let key =
-                    lookup_with_context(&expected.name, expected.mode, as_cf_context(&context))?
-                        .context("key no longer exists")?;
+                let key = lookup_with_context(
+                    &expected.storage_id,
+                    expected.mode,
+                    as_cf_context(&context),
+                )?
+                .context("key no longer exists")?;
                 ensure!(
                     identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
                     "key changed; restart agent"
                 );
-                let plaintext = zeroize::Zeroizing::new(key.decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
-                    .map_err(|_| anyhow!("decryption failed: authorization cancelled or unavailable, invalidated key, or damaged ciphertext"))?);
+                let plaintext = zeroize::Zeroizing::new(
+                    key.decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
+                        .map_err(|e| private_operation_error(expected, "decryption", &e))?,
+                );
                 ensure!(
                     plaintext.len() <= MAX_SECRET_BYTES,
                     "decrypted secret exceeds 64 KiB"
@@ -231,16 +236,18 @@ impl SecureEnclave {
             expected.decrypt_description("ECIES P-256/SHA-256/AES-GCM", caller)
         };
         let context = authentication_context(expected.mode, &details);
-        let key = lookup_with_context(&expected.name, expected.mode, as_cf_context(&context))?
-            .context("key no longer exists")?;
+        let key =
+            lookup_with_context(&expected.storage_id, expected.mode, as_cf_context(&context))?
+                .context("key no longer exists")?;
         ensure!(
             identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
             "key changed; restart agent"
         );
         tracing::info!(event = "decrypt_requested", key = %expected.name, fingerprint = %expected.fingerprint,
             caller_json = %serde_json::to_string(caller)?);
-        let plaintext = key.decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
-            .map_err(|_| anyhow!("decryption failed: authorization cancelled or unavailable, invalidated key, or damaged ciphertext"))?;
+        let plaintext = key
+            .decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
+            .map_err(|e| private_operation_error(expected, "decryption", &e))?;
         ensure!(
             plaintext.len() <= MAX_SECRET_BYTES,
             "decrypted secret exceeds 64 KiB"
@@ -371,6 +378,30 @@ fn identity(key: &SecKey, name: &str, mode: Mode) -> Result<Identity> {
 }
 
 impl KeyStore for SecureEnclave {
+    fn create_generation(&self, name: &str, mode: Mode) -> Result<Identity> {
+        use security_framework::item::{ItemUpdateOptions, update_item};
+        // The fingerprint is only known after hardware creation. Keep a unique
+        // pending label until it can be rebound; a failure never touches old keys.
+        let pending = seccy_core::pending_key_id();
+        let (mut identity, created) = self.provision(&pending, mode)?;
+        ensure!(created, "pending key collision");
+        let id = identity.key_id();
+        ensure!(
+            lookup(&id, mode)?.is_none(),
+            "key fingerprint already exists"
+        );
+        update_item(
+            ItemSearchOptions::new()
+                .key_class(KeyClass::private())
+                .label(&label(&pending, mode))
+                .case_insensitive(Some(false))
+                .ignore_legacy_keychains(),
+            ItemUpdateOptions::new().set_label(label(&id, mode)),
+        )?;
+        identity.storage_id = id;
+        Ok(identity.with_name(name))
+    }
+
     fn provision(&self, name: &str, mode: Mode) -> Result<(Identity, bool)> {
         let other = match mode {
             Mode::Prompt => Mode::Notify,
@@ -421,7 +452,7 @@ impl KeyStore for SecureEnclave {
         // Keychain ACLs still enforce biometryCurrentSet; this only customizes UI.
         let context = authentication_context(expected.mode, &details);
         let cf_context = as_cf_context(&context);
-        let key = lookup_with_context(&expected.name, expected.mode, cf_context)?
+        let key = lookup_with_context(&expected.storage_id, expected.mode, cf_context)?
             .context("key no longer exists")?;
         ensure!(
             identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
@@ -429,12 +460,83 @@ impl KeyStore for SecureEnclave {
         );
         let signature = key
             .create_signature(Algorithm::ECDSASignatureMessageX962SHA256, message)
-            .map_err(|e| anyhow!("Secure Enclave signing failed: {e}"))?;
+            .map_err(|e| private_operation_error(expected, "signing", &e))?;
         if expected.mode == Mode::Notify {
             notify("seccy: key used", &details)?;
             tracing::info!(event = "notification_submitted");
         }
         Ok(signature)
+    }
+}
+
+// Error -3 is corruptedData, not proof that enrollment changed. Never infer
+// biometric changes from a localized error description or a bare numeric code.
+fn invalidation_hint(mode: Mode, domain: &str, code: isize) -> Option<&'static str> {
+    if mode != Mode::Prompt || domain != "CryptoTokenKit" {
+        return None;
+    }
+    match code {
+        -3 => Some(
+            "Touch ID enrollment may have changed, or key data is damaged. Adding/removing fingerprints permanently invalidates seccy prompt keys.",
+        ),
+        -10 => Some(
+            "The device key was invalidated. A Touch ID enrollment change can permanently invalidate seccy prompt keys.",
+        ),
+        _ => None,
+    }
+}
+
+fn private_operation_error(
+    expected: &Identity,
+    operation: &str,
+    error: &core_foundation::error::CFError,
+) -> anyhow::Error {
+    let domain = error.domain().to_string();
+    let code = error.code();
+    let Some(hint) = invalidation_hint(expected.mode, &domain, code) else {
+        return anyhow!("Secure Enclave {operation} failed ({domain} {code}): {error}");
+    };
+    let message = format!(
+        "Key {}: {hint} Run seccy rebuild {}. For secrets, check the file for other recipients; reencrypt on a working recipient machine or re-enter values with seccy secrets reset.",
+        expected.name, expected.name
+    );
+    // A failed SSH connection can try the same key many times. Notifications
+    // are best effort and must never replace the original operation failure.
+    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    let show = LAST
+        .lock()
+        .map(|mut last| {
+            if last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(60)) {
+                false
+            } else {
+                *last = Some(std::time::Instant::now());
+                true
+            }
+        })
+        .unwrap_or(false);
+    let brief = format!(
+        "Key {} is unavailable, possibly after a Touch ID change. Run seccy rebuild {}. For secrets, use another recipient or seccy secrets reset.",
+        expected.name, expected.name
+    );
+    if show && let Err(e) = notify("seccy: key unavailable", &brief) {
+        tracing::warn!(event = "key_failure_notification_failed", error = %e);
+    }
+    anyhow!("Secure Enclave {operation} failed ({domain} {code}): {error}. {message}")
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+    #[test]
+    fn corrupted_data_is_only_a_hint_and_cancellation_is_not_invalidation() {
+        let hint = invalidation_hint(Mode::Prompt, "CryptoTokenKit", -3).unwrap();
+        assert!(hint.contains("may have changed"));
+        for code in [-4, -5, -9] {
+            assert!(invalidation_hint(Mode::Prompt, "CryptoTokenKit", code).is_none());
+        }
+        assert!(invalidation_hint(Mode::Notify, "CryptoTokenKit", -3).is_none());
+        assert!(invalidation_hint(Mode::Prompt, "OtherDomain", -3).is_none());
+        assert!(invalidation_hint(Mode::Prompt, "CryptoTokenKit", -10).is_some());
     }
 }
 

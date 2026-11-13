@@ -120,7 +120,10 @@ ignore rules if their contents should remain machine-local.
 
 Provisioning records the resolved policy, permissions and display name alongside the
 existing identity. It reuses compatible keys. Changing provider or mode is rejected
-with `migration_required`; automatic replacement and key generations are not implemented.
+with `migration_required`. Use `seccy rebuild [NAME]` for explicit generation
+replacement under the same provider (`--mode` can change prompt/notify where
+permitted). Retired generations retain their original policy for decryption.
+Cross-provider migration is not implemented.
 Current source config can immediately narrow permissions. Expanding persisted explicit
 permissions requires provisioning again. If the source disappears, persisted permissions
 remain in effect. Removing a config entry does not remove the registered key.

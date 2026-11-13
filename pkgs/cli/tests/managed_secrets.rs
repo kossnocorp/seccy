@@ -75,6 +75,9 @@ fn mock_agent(
                 policy: None,
                 uses: None,
                 github_roles: None,
+                storage_id: None,
+                retired: false,
+                alias: None,
                 secrets: true,
                 mode: Mode::Prompt,
                 github: None,
@@ -735,4 +738,107 @@ fn local_overlays_follow_directory_order_and_global_path_is_independent() {
         .output()
         .unwrap());
     assert_eq!(fs::read(&global).unwrap(), before);
+}
+
+#[test]
+fn reset_accepts_global_and_explicit_scope_without_exposing_values() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let cwd = dir.path();
+    let global = cwd.join("config/seccy/secrets.toml");
+    let local = cwd.join("seccy.toml");
+    write_scope(&global, &[("GLOBAL", "global plaintext")]);
+    write_scope(&local, &[("LOCAL", "local plaintext")]);
+    let before = fs::read(&local).unwrap();
+    let global_before = fs::read(&global).unwrap();
+    for scope in [vec!["--global"], vec!["--secrets", local.to_str().unwrap()]] {
+        for extras in [vec!["--yes"], vec!["--yes", "--recipient", "missing"]] {
+            let output = cmd(cwd)
+                .args(["secrets", "reset", "--json"])
+                .args(&scope)
+                .args(extras)
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stdout).contains("recipient"));
+        }
+        assert_eq!(fs::read(&local).unwrap(), before);
+        assert_eq!(fs::read(&global).unwrap(), global_before);
+    }
+}
+
+#[test]
+fn reset_named_secret_from_environment_preserves_other_values_and_rejects_missing_input() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let cwd = dir.path();
+    let file = cwd.join("seccy.toml");
+    write_scope(&file, &[("FIRST", "old"), ("SECOND", "keep")]);
+    let before = fs::read(&file).unwrap();
+    for args in [
+        vec![
+            "s",
+            "reset",
+            "--from-env",
+            "NEW_TOKEN",
+            "--recipient",
+            "mac",
+            "--yes",
+            "--json",
+        ],
+        vec![
+            "s",
+            "reset",
+            "FIRST",
+            "--from-env",
+            "MISSING_TOKEN",
+            "--recipient",
+            "mac",
+            "--yes",
+            "--json",
+        ],
+        vec![
+            "s",
+            "reset",
+            "UNKNOWN",
+            "--from-env",
+            "NEW_TOKEN",
+            "--recipient",
+            "mac",
+            "--yes",
+            "--json",
+        ],
+    ] {
+        let output = cmd(cwd)
+            .args(args)
+            .env("NEW_TOKEN", "replacement")
+            .env_remove("MISSING_TOKEN")
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(fs::read(&file).unwrap(), before);
+    }
+    let old: toml::Value = toml::from_str(std::str::from_utf8(&before).unwrap()).unwrap();
+    for replacement in ["replacement-from-env\n", ""] {
+        let output = cmd(cwd)
+            .args([
+                "s",
+                "reset",
+                "FIRST",
+                "--from-env",
+                "NEW_TOKEN",
+                "--recipient",
+                "mac",
+                "--yes",
+                "--json",
+            ])
+            .env("NEW_TOKEN", replacement)
+            .output()
+            .unwrap();
+        assert_eq!(ok(output)["count"], 1);
+        let new: toml::Value = toml::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(new["secrets"]["SECOND"], old["secrets"]["SECOND"]);
+        assert_ne!(new["secrets"]["FIRST"], old["secrets"]["FIRST"]);
+        let logs = fs::read_to_string(cwd.join("state/seccy/logs/seccy.jsonl")).unwrap();
+        assert!(!logs.contains("replacement-from-env"));
+        assert!(!logs.contains(&B64.encode(b"replacement-from-env\n")));
+    }
 }

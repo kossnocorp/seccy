@@ -41,6 +41,9 @@ struct Enrollment {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
+    /// Immutable KDF context, chosen before the TPM public key is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    binding: Option<String>,
     #[serde(default)]
     deleting: bool,
     point: Vec<u8>,
@@ -286,6 +289,29 @@ impl KeyStore for Vault {
         Enrollment::load()?.identity(name, mode)
     }
     fn provision(&self, name: &str, mode: Mode) -> Result<(Identity, bool)> {
+        self.provision_key(name, mode, false)
+    }
+    fn create_generation(&self, name: &str, mode: Mode) -> Result<Identity> {
+        Ok(self.provision_key(name, mode, true)?.0)
+    }
+    fn sign(
+        &self,
+        identity: &Identity,
+        message: &[u8],
+        caller: &Caller,
+        payload: &Payload,
+    ) -> Result<Vec<u8>> {
+        let details = identity.sign_description(message.len(), caller, payload);
+        let bytes = self.operate(identity, 2, &Sha256::digest(message), &details)?;
+        Ok(p256::ecdsa::Signature::from_slice(&bytes)?
+            .to_der()
+            .as_bytes()
+            .to_vec())
+    }
+}
+
+impl Vault {
+    fn provision_key(&self, name: &str, mode: Mode, fresh: bool) -> Result<(Identity, bool)> {
         ensure!(
             mode == Mode::Prompt,
             "Linux TPM/FIDO keys require mode=prompt; unattended notify mode is not supported"
@@ -295,7 +321,7 @@ impl KeyStore for Vault {
             .map_err(|_| anyhow::anyhow!("native lock poisoned"))?;
         let _lock = lock()?;
         let mut state = Enrollment::load()?;
-        if let Some(identity) = state.identity(name, mode)? {
+        if !fresh && let Some(identity) = state.identity(name, mode)? {
             ensure!(
                 !state.keys[name].deleting,
                 "key deletion is pending; repeat remove before provisioning"
@@ -316,16 +342,30 @@ impl KeyStore for Vault {
         }
         ensure!(state.keys.len() < 128, "vault key limit reached");
         let secret = state.unlock(&format!("Create Seccy key {name:?} on this TPM"))?;
-        let auth = derive(&secret[..], &state.vault, &format!("tpm-auth/{name}"))?;
-        let wrapping = derive(&secret[..], &state.vault, &format!("wrap/{name}"))?;
+        let binding = if fresh {
+            seccy_core::pending_key_id()
+        } else {
+            name.into()
+        };
+        let auth = derive(&secret[..], &state.vault, &format!("tpm-auth/{binding}"))?;
+        let wrapping = derive(&secret[..], &state.vault, &format!("wrap/{binding}"))?;
         let mut blob = Zeroizing::new(Vec::new());
         let (point, parent) = native::tpm(1, &auth, &mut blob, &[])?;
         ensure!(parent == state.parent, "TPM identity changed");
-        let identity = Identity::new(name, mode, &point)?;
+        let mut identity = Identity::new(name, mode, &point)?;
+        if fresh {
+            identity.storage_id = identity.key_id();
+        }
+        let storage_id = identity.storage_id.as_str();
+        ensure!(
+            !state.keys.contains_key(storage_id),
+            "physical key ID already exists"
+        );
         let encrypted = seal(&wrapping, &blob, identity.fingerprint.as_bytes())?;
         state.keys.insert(
-            name.into(),
+            storage_id.into(),
             Record {
+                binding: Some(binding),
                 deleting: false,
                 point,
                 pending: Some(encrypted.clone()),
@@ -334,31 +374,19 @@ impl KeyStore for Vault {
         state.save()?;
         native::secret(
             &state.vault,
-            &format!("key/{name}"),
+            &format!("key/{storage_id}"),
             Some(&encrypted),
             false,
         )?;
-        state.keys.get_mut(name).context("key disappeared")?.pending = None;
+        state
+            .keys
+            .get_mut(storage_id)
+            .context("key disappeared")?
+            .pending = None;
         state.save()?;
         Ok((identity, true))
     }
-    fn sign(
-        &self,
-        identity: &Identity,
-        message: &[u8],
-        caller: &Caller,
-        payload: &Payload,
-    ) -> Result<Vec<u8>> {
-        let details = identity.sign_description(message.len(), caller, payload);
-        let bytes = self.operate(identity, 2, &Sha256::digest(message), &details)?;
-        Ok(p256::ecdsa::Signature::from_slice(&bytes)?
-            .to_der()
-            .as_bytes()
-            .to_vec())
-    }
-}
 
-impl Vault {
     fn operate(
         &self,
         identity: &Identity,
@@ -372,27 +400,27 @@ impl Vault {
         let _lock = lock()?;
         let state = Enrollment::load()?;
         let actual = state
-            .identity(&identity.name, identity.mode)?
+            .identity(&identity.storage_id, identity.mode)?
             .context("key missing from vault")?;
         ensure!(
-            !state.keys[&identity.name].deleting,
+            !state.keys[&identity.storage_id].deleting,
             "key deletion is pending"
         );
         ensure!(actual.blob == identity.blob, "key identity changed");
-        let encrypted =
-            native::secret(&state.vault, &format!("key/{}", identity.name), None, false)?
-                .context("encrypted TPM key is missing; restore it rather than reprovisioning")?;
+        let encrypted = native::secret(
+            &state.vault,
+            &format!("key/{}", identity.storage_id),
+            None,
+            false,
+        )?
+        .context("encrypted TPM key is missing; restore it rather than reprovisioning")?;
         let secret = state.unlock(details)?;
-        let wrapping = derive(
-            &secret[..],
-            &state.vault,
-            &format!("wrap/{}", identity.name),
-        )?;
-        let auth = derive(
-            &secret[..],
-            &state.vault,
-            &format!("tpm-auth/{}", identity.name),
-        )?;
+        let binding = state.keys[&identity.storage_id]
+            .binding
+            .as_deref()
+            .unwrap_or(&identity.storage_id);
+        let wrapping = derive(&secret[..], &state.vault, &format!("wrap/{binding}"))?;
+        let auth = derive(&secret[..], &state.vault, &format!("tpm-auth/{binding}"))?;
         let mut blob = open(&wrapping, &encrypted, identity.fingerprint.as_bytes())?;
         let (result, parent) = native::tpm(operation, &auth, &mut blob, input)?;
         ensure!(parent == state.parent, "TPM identity changed");
@@ -424,7 +452,8 @@ impl Vault {
         };
         if let Some(encrypted) = encrypted {
             let identity = Identity::new(name, Mode::Prompt, &record.point)?;
-            let wrapping = derive(&secret[..], &state.vault, &format!("wrap/{name}"))?;
+            let binding = record.binding.as_deref().unwrap_or(name);
+            let wrapping = derive(&secret[..], &state.vault, &format!("wrap/{binding}"))?;
             let mut blob = open(&wrapping, &encrypted, identity.fingerprint.as_bytes())?;
             // Keep the encrypted blob available if deletion is interrupted.
             let record = state.keys.get_mut(name).context("key disappeared")?;
@@ -443,7 +472,7 @@ impl Vault {
             .map_err(|_| anyhow::anyhow!("native lock poisoned"))?;
         let state = Enrollment::load()?;
         let actual = state
-            .identity(&identity.name, identity.mode)?
+            .identity(&identity.storage_id, identity.mode)?
             .context("key missing")?;
         ensure!(actual.blob == identity.blob, "key changed");
         state.check_tpm()?;
@@ -452,7 +481,13 @@ impl Vault {
             "FIDO authenticator is not connected"
         );
         ensure!(
-            native::secret(&state.vault, &format!("key/{}", identity.name), None, false)?.is_some(),
+            native::secret(
+                &state.vault,
+                &format!("key/{}", identity.storage_id),
+                None,
+                false
+            )?
+            .is_some(),
             "encrypted TPM key missing"
         );
         Ok(())
@@ -460,10 +495,13 @@ impl Vault {
     pub fn encrypt(&self, identity: &Identity, plaintext: &[u8]) -> Result<String> {
         ensure!(plaintext.len() <= MAX_SECRET_BYTES, "secret exceeds 64 KiB");
         let state = Enrollment::load()?;
-        let record = state.keys.get(&identity.name).context("key missing")?;
+        let record = state
+            .keys
+            .get(&identity.storage_id)
+            .context("key missing")?;
         ensure!(
             state
-                .identity(&identity.name, identity.mode)?
+                .identity(&identity.storage_id, identity.mode)?
                 .context("key missing")?
                 .blob
                 == identity.blob,

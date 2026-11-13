@@ -120,7 +120,7 @@ pub fn serve(
         let _guard = operations
             .lock()
             .map_err(|_| anyhow::anyhow!("key operation lock poisoned"))?;
-        let (_state_lock, keys) = keys.keys()?;
+        let (_state_lock, keys) = keys.keys(true)?;
         let identity = keys
             .iter()
             .find(|key| key.name == request.key)
@@ -236,7 +236,35 @@ pub fn serve(
                 ensure!(request.value.is_none(), "check does not accept a payload");
                 platform::Store.crypto_check(identity)?;
                 Ok(
-                    json!({"ok": true, "key": identity.name, "fingerprint": identity.fingerprint, "mode": identity.mode}),
+                    json!({"ok": true, "key": identity.name, "fingerprint": identity.fingerprint, "mode": identity.mode, "private_key_verified": false}),
+                )
+            }
+            "verify" => {
+                ensure!(
+                    identity.permits(seccy_core::config::Use::Secrets),
+                    "key use does not permit secrets verification"
+                );
+                ensure!(request.value.is_none(), "verify does not accept a payload");
+                let caller = platform::caller(&stream)?;
+                ensure!(caller.pid == connected.pid, "socket peer changed");
+                if let (Some(before), Some(now)) = (&connected.process, &caller.process) {
+                    ensure!(
+                        before.start_time_unix_seconds == now.start_time_unix_seconds
+                            && before.start_time_microseconds == now.start_time_microseconds,
+                        "socket peer process changed"
+                    );
+                }
+                let challenge = b"seccy private-key diagnostic";
+                let encrypted = platform::Store.encrypt(identity, challenge)?;
+                let clear = zeroize::Zeroizing::new(
+                    platform::Store.decrypt(identity, &encrypted, &caller)?,
+                );
+                ensure!(
+                    clear.as_slice() == challenge,
+                    "private-key verification failed"
+                );
+                Ok(
+                    json!({"ok":true,"key":identity.name,"fingerprint":identity.fingerprint,"private_key_verified":true}),
                 )
             }
             "decrypt" => {

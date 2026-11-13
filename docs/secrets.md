@@ -74,7 +74,7 @@ change the configured recipients can redirect newly encrypted secrets.
 By default, mutations write the nearest existing project `seccy.toml`, or create
 one in the current directory. Setting an inherited secret creates an override in
 that active file when there is no ambiguity. If multiple existing secrets files
-are detected, mutations (`set`, `enroll`, `reencrypt`, `remove`, and recipient
+are detected, mutations (`set`, `enroll`, `reencrypt`, `reset`, `remove`, and recipient
 add/remove) first show an arrow-key file picker, closest file first and global last.
 Each row includes recipient aliases and secret names, never values. Use Up/Down
 (or j/k), then Enter; Escape or Ctrl-C cancels without changing any files. Picking
@@ -244,3 +244,113 @@ enroll two prompt keys, encrypt without an agent, restart the new agent, decrypt
 with each key, cancel a prompt, and confirm re-encryption leaves the file intact
 on cancellation. Test malformed requests and verify notify/unenrolled keys are
 rejected without private operations.
+
+## Touch ID changes and recovery
+
+Seccy prompt keys use Apple's
+[`biometryCurrentSet`](https://developer.apple.com/documentation/security/secaccesscontrolcreateflags/biometrycurrentset).
+Adding **or removing** a fingerprint invalidates keys protected with this policy.
+Removing the newly added finger, restarting the agent, or entering a password
+does not restore an invalidated key. Secure Enclave private keys
+[cannot be exported or imported](https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave).
+Seccy does not weaken this policy to `biometryAny` or add password fallback.
+
+CryptoTokenKit `-3` means corrupted data, not definitive evidence of changed
+enrollment. Seccy therefore reports enrollment changes as a possible cause,
+preserves the underlying error, and sends a rate-limited notification on relevant
+prompt-key failures. Cancellation is not classified as invalidation. Notify-mode
+keys do not use the current-biometric-set policy.
+
+Apple Passwords/iCloud Keychain passkeys have a different lifecycle:
+[they can sync across approved devices](https://support.apple.com/en-us/109016).
+They are not Seccy's non-exportable, device-bound keys with this enrollment ACL;
+adding a fingerprint does not imply your synced passkeys were destroyed.
+
+Inspect before replacing values:
+
+```sh
+seccy crypto-check secrets --verify
+```
+
+Inspect recipients directly in `seccy.toml` or `secrets.toml`. A listed recipient
+does not prove its private key still works. If a secret has only one recipient
+and its key is invalidated, its value must be re-entered. With multiple recipients,
+a working private key on another machine can recover and re-encrypt the value.
+
+Create replacement keys **using the same logical names**:
+
+```sh
+seccy rebuild                 # confirms once before rebuilding all active keys
+# Or rebuild one key:
+# seccy rebuild secrets
+seccy gh sync
+seccy secrets enroll secrets --global
+seccy crypto-check secrets --verify
+```
+
+Rebuilding asks before switching aliases (`--yes` skips confirmation).
+With no name it lists and rebuilds all active registered keys, excluding retired
+generations; each keeps its mode unless `--mode` is given. Completed replacements
+are saved individually. If a later key fails, inspect inventory and retry only
+remaining keys by name.
+It retains previous generations under their full SHA-256 key IDs and preserves
+their enrollment for old ciphertext. SSH/signing use the active generation;
+old public-key registrations on servers must be updated. The agent reloads the
+registry automatically. Start/restart it after installing this updated version.
+
+Enrollment preserves existing recipient mappings. If `secrets` already names
+the old public recipient, enrollment automatically uses the new full key ID as
+the recipient alias and prints it. An explicit `--name replacement` is also
+available. Copy the emitted public recipient to the recovery machine using
+`seccy secrets recipients add replacement <public-recipient>`.
+
+If another recipient can decrypt, run on that machine:
+
+```sh
+seccy secrets reencrypt --secrets ./seccy.toml --recipient replacement --identity working-key
+```
+
+Select all recipients you want to keep with repeated `--recipient` flags.
+Distribute the re-encrypted file back to the rebuilt machine and verify it there.
+For local retained generations, automatic selection matches ciphertext
+fingerprints and prefers active matching generations. `--identity secrets`
+can select a retained generation of that alias when only that generation matches;
+`--identity <retired-key-id>` selects it explicitly. A failed authorization does
+not silently try other identities. Preserve old generations until all files and
+backups that need them have been considered.
+
+If no recipient can decrypt, replace every value in the selected file:
+
+```sh
+seccy secrets reset --global --recipient replacement
+seccy secrets reset TOKEN --global --recipient replacement
+seccy secrets reset --secrets ./seccy.toml --recipient replacement
+```
+
+To read one replacement value from an environment variable:
+
+```sh
+seccy secrets reset TOKEN --global --recipient replacement --from-env NEW_TOKEN
+```
+
+This reads `NEW_TOKEN` from the command's environment; an unset variable is an
+error, and an empty value is preserved. `--from-env` requires a secret name.
+Confirmation is still required unless `--yes` is supplied. `SECCY_IDENTITY`
+selects decryption identities and does not select reset's encryption recipients.
+
+Use the recipient alias printed by enrollment in place of `replacement`.
+`reset` requires explicit recipients, confirms replacement, and prompts without
+echo for each selected secret. Pass a secret name to replace only that definition;
+omit it to replace every secret in the active file. It does not need the old private key or
+running agent. All prompts and encryptions must succeed before a single atomic
+file replacement; cancellation, an encryption failure, or a detected concurrent
+edit preserves the original file. Only the active file's definitions are reset,
+not inherited definitions. `--global` and `--secrets PATH` work before or after
+the subcommand and are mutually exclusive. No plaintext is logged or written
+to temporary files. For binary/multiline values, use `secrets set NAME --from-file`
+individually instead of the line-oriented reset prompt.
+
+Single-recipient `seccy:v1:` ciphertext from `seccy encrypt` has no alternative
+recipient or named-secret inventory. If its key is invalidated, recover the value
+from its original source and encrypt it again. `secrets reset` operates on managed
+`seccy:secrets:v1:` files only.

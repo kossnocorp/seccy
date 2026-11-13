@@ -23,6 +23,14 @@ pub struct Record {
     pub uses: Option<crate::config::Many<crate::config::Use>>,
     #[serde(default)]
     pub github_roles: Option<Vec<crate::Github>>,
+    /// None means a legacy backend item bound directly to its registry name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_id: Option<String>,
+    /// Retired generations remain decryptable but are not offered for SSH/Git.
+    #[serde(default)]
+    pub retired: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     /// Explicit local consent to use this key for managed secrets.
     #[serde(default)]
     pub secrets: bool,
@@ -75,6 +83,20 @@ impl State {
                     "registry secrets permission mismatch"
                 );
             }
+            for id in record.storage_id.iter().chain(record.alias.iter()) {
+                ensure!(
+                    !id.is_empty()
+                        && id.len() <= 64
+                        && id
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b)),
+                    "invalid key binding"
+                );
+            }
+            ensure!(
+                !record.retired || record.alias.is_some(),
+                "retired key is missing its alias"
+            );
             ensure!(
                 record.config.is_absolute(),
                 "state config path must be absolute"
@@ -106,6 +128,9 @@ impl State {
                 policy: Some(policy.clone()),
                 uses: key.uses.clone(),
                 github_roles: Some(key.github_roles()),
+                storage_id: None,
+                retired: false,
+                alias: None,
                 secrets: false,
                 mode: policy.mode,
                 github: key.github,
@@ -124,14 +149,16 @@ impl State {
         };
         let config = Config::load(&record.config)?;
         let mut uses = record.uses.clone();
-        if let Some(key) = config.keys.get(name) {
-            let policy = config.resolve(name)?;
-            policy.ensure_available()?;
-            ensure!(
-                policy.mode == record.mode
-                    && record.policy.as_ref().is_none_or(|old| old == &policy),
-                "migration_required: provider policy changed for {name}"
-            );
+        if let Some(key) = config.keys.get(record.alias.as_deref().unwrap_or(name)) {
+            if !record.retired {
+                let policy = config.resolve(name)?;
+                policy.ensure_available()?;
+                ensure!(
+                    policy.mode == record.mode
+                        && record.policy.as_ref().is_none_or(|old| old == &policy),
+                    "migration_required: provider policy changed for {name}"
+                );
+            }
             if let Some(requested) = &key.uses {
                 uses = Some(crate::config::Many(
                     requested
@@ -143,10 +170,29 @@ impl State {
                 ));
             }
         }
-        Ok(store.identity(name, record.mode)?.map(|mut i| {
+        if record.storage_id.is_none()
+            && record.fingerprint.is_none()
+            && self
+                .keys
+                .values()
+                .any(|r| r.retired && r.storage_id.as_deref() == Some(name))
+        {
+            return Ok(None);
+        }
+        let identity = store.identity(record.storage_id.as_deref().unwrap_or(name), record.mode)?;
+        if let Some(identity) = &identity {
+            ensure!(
+                record
+                    .fingerprint
+                    .as_ref()
+                    .is_none_or(|f| f == &identity.fingerprint),
+                "key binding changed for {name}; refusing to use another key"
+            );
+        }
+        Ok(identity.map(|mut i| {
             i.uses = uses;
             i.display_name = record.display_name.clone();
-            i.with_email(record.email.as_deref())
+            i.with_name(name).with_email(record.email.as_deref())
         }))
     }
 
@@ -165,6 +211,8 @@ impl State {
         info.provider = record.policy.clone();
         info.uses = record.uses.clone();
         info.display_name = record.display_name.clone();
+        info.retired = record.retired;
+        info.alias = record.alias.clone();
         info.config = Some(display_path(&record.config));
         Ok(Some(info))
     }

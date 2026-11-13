@@ -100,7 +100,23 @@ fn public_material(key: &str) -> Vec<&str> {
     key.split_whitespace().take(2).collect()
 }
 
-fn plan(prefix: &str, desired: Vec<Key>, remote: Vec<Key>) -> Plan {
+fn plan(prefix: &str, desired: Vec<Key>, remote: Vec<Key>) -> Result<Plan> {
+    // The short title hash is display metadata only. Fail closed on collisions
+    // and always reconcile using the complete public key below.
+    let mut titles = std::collections::BTreeSet::new();
+    for key in &desired {
+        ensure!(
+            !remote.iter().any(|remote| remote.title == key.title
+                && public_material(&remote.key) != public_material(&key.key)),
+            "GitHub title hash collision: {}; no changes made",
+            key.title
+        );
+        ensure!(
+            titles.insert((key.kind, &key.title)),
+            "GitHub title hash collision: {}; no changes made",
+            key.title
+        );
+    }
     let mut plan = Plan {
         add: desired,
         ..Plan::default()
@@ -112,6 +128,12 @@ fn plan(prefix: &str, desired: Vec<Key>, remote: Vec<Key>) -> Plan {
         if name.is_empty() || name.contains('/') {
             continue;
         }
+        ensure!(
+            !plan.add.iter().any(|wanted| wanted.title == key.title
+                && public_material(&wanted.key) != public_material(&key.key)),
+            "GitHub title hash collision: {}; no changes made",
+            key.title
+        );
         if let Some(index) = plan.add.iter().position(|wanted| {
             wanted.title == key.title
                 && wanted.kind == key.kind
@@ -122,7 +144,7 @@ fn plan(prefix: &str, desired: Vec<Key>, remote: Vec<Key>) -> Plan {
             plan.remove.push(key);
         }
     }
-    plan
+    Ok(plan)
 }
 
 fn machine_prefix() -> Result<String> {
@@ -153,6 +175,9 @@ pub fn run(
     let state = crate::inventory::view(paths, config, source)?;
     let mut desired = Vec::new();
     for (name, record) in &state.keys {
+        if record.retired {
+            continue;
+        }
         let roles = config
             .keys
             .get(name)
@@ -180,7 +205,10 @@ pub fn run(
             );
             desired.push(Key {
                 kind,
-                title: format!("{prefix}{name}"),
+                title: format!(
+                    "{prefix}{name}#{:08x}",
+                    twox_hash::XxHash32::oneshot(0, &identity.blob)
+                ),
                 key: identity.public_key.clone(),
                 id: None,
             });
@@ -188,7 +216,7 @@ pub fn run(
     }
     let mut remote = client.list(Github::Auth)?;
     remote.extend(client.list(Github::Signing)?);
-    let plan = plan(&prefix, desired, remote);
+    let plan = plan(&prefix, desired, remote)?;
     for key in &plan.remove {
         eprintln!(
             "Remove {} key {:?} (ID {})",
@@ -253,6 +281,43 @@ mod tests {
     }
 
     #[test]
+    fn short_title_collisions_fail_and_full_key_controls_reconciliation() {
+        let prefix = "me@host/seccy/";
+        let title = "me@host/seccy/auth#deadbeef";
+        assert!(
+            plan(
+                prefix,
+                vec![
+                    key(title, Github::Auth, "ssh-type AAA", None),
+                    key(title, Github::Auth, "ssh-type BBB", None),
+                ],
+                vec![]
+            )
+            .is_err()
+        );
+        assert!(
+            plan(
+                prefix,
+                vec![key(title, Github::Auth, "ssh-type AAA", None)],
+                vec![key(title, Github::Auth, "ssh-type BBB", Some(1))],
+            )
+            .is_err()
+        );
+        let same = plan(
+            prefix,
+            vec![key(title, Github::Auth, "ssh-type AAA new-comment", None)],
+            vec![key(
+                title,
+                Github::Auth,
+                "ssh-type AAA old-comment",
+                Some(1),
+            )],
+        )
+        .unwrap();
+        assert!(same.add.is_empty() && same.remove.is_empty());
+    }
+
+    #[test]
     fn reconcile_rotation_duplicates_types_and_machine_scope() {
         let prefix = "me@host/seccy/";
         let desired = vec![
@@ -263,7 +328,7 @@ mod tests {
                 None,
             ),
             key(
-                "me@host/seccy/rotate",
+                "me@host/seccy/rotate#01234567",
                 Github::Signing,
                 "ssh-type NEW",
                 None,
@@ -299,7 +364,7 @@ mod tests {
             ),
             key("unmanaged", Github::Auth, "ssh-type CCC", Some(7)),
         ];
-        let plan = plan(prefix, desired, remote);
+        let plan = plan(prefix, desired, remote).unwrap();
         assert_eq!(
             plan.remove
                 .iter()

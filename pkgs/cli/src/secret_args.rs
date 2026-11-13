@@ -30,6 +30,8 @@ pub enum SecretsCommand {
     Enroll(EnrollArgs),
     /// Re-encrypt active-file secrets to the current recipients, atomically
     Reencrypt(RecipientsArgs),
+    /// Re-enter one or all active-file secrets and atomically encrypt to selected recipients
+    Reset(ResetSecretsArgs),
     /// Remove a secret from the active file
     Remove(NameArgs),
     /// Manage public recipients
@@ -82,4 +84,19 @@ pub enum RecipientCommand {
 pub struct AddRecipientArgs {
     pub name: String,
     pub public_key: String,
+}
+
+#[derive(Args)]
+pub struct ResetSecretsArgs {
+    /// Existing secret name; omit to reset every secret in the active file
+    pub name: Option<String>,
+    /// Read the replacement from an environment variable (requires a secret name)
+    #[usage(long)]
+    pub from_env: Option<String>,
+    /// Replacement recipient aliases (required; repeat for multiple recipients)
+    #[usage(long, var)]
+    pub recipient: Vec<String>,
+    /// Skip replacement confirmation; values are still prompted without echo
+    #[usage(short = 'y', long)]
+    pub yes: bool,
 }

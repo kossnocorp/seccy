@@ -38,6 +38,8 @@ pub struct Identity {
     #[serde(rename = "use", skip_serializing_if = "Option::is_none")]
     pub uses: Option<config::Many<config::Use>>,
     pub name: String,
+    /// Physical backend binding; independent of the reusable human alias.
+    pub storage_id: String,
     pub mode: Mode,
     pub public_key: String,
     pub fingerprint: String,
@@ -54,6 +56,19 @@ impl Identity {
 
     pub fn permits(&self, usage: config::Use) -> bool {
         self.uses.as_ref().is_none_or(|u| u.0.contains(&usage))
+    }
+
+    /// Full SHA-256 fingerprint in a filesystem/Keychain-safe encoding.
+    pub fn key_id(&self) -> String {
+        format!(
+            "key_{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(&self.blob))
+        )
+    }
+
+    pub fn with_name(mut self, name: &str) -> Self {
+        self.name = name.into();
+        self.with_email(None)
     }
 
     pub fn managed_secret_description(&self, name: &str, caller: &Caller) -> String {
@@ -114,6 +129,7 @@ impl Identity {
             display_name: None,
             uses: None,
             name: name.into(),
+            storage_id: name.into(),
             mode,
             public_key: format!("ecdsa-sha2-nistp256 {} {name}", STANDARD.encode(&blob)),
             fingerprint: format!(
@@ -278,6 +294,11 @@ impl Caller {
 
 /// Implementations return ASN.1 DER ECDSA signatures over SHA-256(message).
 pub trait KeyStore {
+    /// Create a fresh immutable generation without deleting/rebinding existing keys.
+    fn create_generation(&self, _name: &str, _mode: Mode) -> Result<Identity> {
+        anyhow::bail!("this backend does not support key rebuilding")
+    }
+
     fn provision(&self, name: &str, mode: Mode) -> Result<(Identity, bool)>;
     fn identity(&self, name: &str, mode: Mode) -> Result<Option<Identity>>;
     fn sign(
@@ -287,4 +308,30 @@ pub trait KeyStore {
         caller: &Caller,
         payload: &payload::Payload,
     ) -> Result<Vec<u8>>;
+}
+
+pub fn pending_key_id() -> String {
+    use rand_core::{OsRng, RngCore};
+    let mut nonce = [0u8; 32];
+    OsRng.fill_bytes(&mut nonce);
+    format!(
+        "pending_{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce)
+    )
+}
+
+/// Parse our P-256 public representation without needing the private key.
+pub fn identity_from_public(name: &str, mode: Mode, public: &str) -> Result<Identity> {
+    let mut fields = public.split_whitespace();
+    ensure!(
+        fields.next() == Some("ecdsa-sha2-nistp256"),
+        "invalid public key algorithm"
+    );
+    let blob = STANDARD.decode(fields.next().context("missing public key")?)?;
+    let point = blob
+        .get(blob.len().saturating_sub(65)..)
+        .context("invalid public key")?;
+    let identity = Identity::new(name, mode, point)?;
+    ensure!(identity.blob == blob, "invalid public key encoding");
+    Ok(identity)
 }

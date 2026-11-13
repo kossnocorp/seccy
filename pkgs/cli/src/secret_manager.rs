@@ -112,25 +112,32 @@ fn recipients(config: &Config, selected: &[String]) -> Result<(Vec<String>, Vec<
     Ok((names, public))
 }
 fn check_configured_identity(config: &seccy_core::Config, state: &State, name: &str) -> Result<()> {
-    if let Some(key) = config.keys.get(name) {
-        let policy = config.resolve(name)?;
-        policy.ensure_available()?;
+    let record = state.keys.get(name);
+    let alias = record.and_then(|r| r.alias.as_deref()).unwrap_or(name);
+    if let Some(key) = config.keys.get(alias) {
         ensure!(
             key.uses
                 .as_ref()
                 .is_none_or(|u| u.0.contains(&seccy_core::config::Use::Secrets)),
             "key use does not permit secrets"
         );
-        if let Some(record) = state.keys.get(name) {
-            ensure!(
-                record.mode == policy.mode
-                    && record.policy.as_ref().is_none_or(|old| old == &policy),
-                "migration_required: selected config does not match enrolled identity"
-            );
+        // Retired generations retain their creation policy. New policy settings
+        // on the active alias must not make old ciphertext inaccessible.
+        if !record.is_some_and(|r| r.retired) {
+            let policy = config.resolve(alias)?;
+            policy.ensure_available()?;
+            if let Some(record) = record {
+                ensure!(
+                    record.mode == policy.mode
+                        && record.policy.as_ref().is_none_or(|old| old == &policy),
+                    "migration_required: selected config does not match enrolled identity"
+                );
+            }
         }
     }
     Ok(())
 }
+
 fn decrypt(
     name: &str,
     secret: &Secret,
@@ -141,10 +148,7 @@ fn decrypt(
     let _lock = crate::inventory::read_lock(&paths)?;
     let state = State::load(&paths)?;
     let envelope = envelope::Envelope::parse(&secret.value, name)?;
-    let identity = state.keys.iter().find(|(key, record)| record.secrets && record.mode == Mode::Prompt
-        && selected.is_none_or(|s| s == key.as_str())
-        && record.fingerprint.as_ref().is_some_and(|f| envelope.wrapped.contains_key(f)))
-        .map(|(name,_)| name.clone()).context("no enrolled local prompt key matches this secret; enroll a matching key or select --identity")?;
+    let identity = select_identity(&state, &envelope, selected)?;
     check_configured_identity(key_config, &state, &identity)?;
     drop(_lock);
     let mut response = crate::secrets::request(
@@ -181,11 +185,8 @@ fn decrypt_batch(
     for name in names {
         let secret = &config.secrets[name];
         let envelope = envelope::Envelope::parse(&secret.value, name)?;
-        let identity = state.keys.iter().find(|(key, record)| record.secrets && record.mode == Mode::Prompt
-            && selected.is_none_or(|s| s == key.as_str())
-            && record.fingerprint.as_ref().is_some_and(|f| envelope.wrapped.contains_key(f)))
-            .map(|(name,_)| name).context("no enrolled local prompt key matches this secret; enroll a matching key or select --identity")?;
-        check_configured_identity(key_config, &state, identity)?;
+        let identity = select_identity(&state, &envelope, selected)?;
+        check_configured_identity(key_config, &state, &identity)?;
         entries.push(json!({"key": identity, "name": name, "value": secret.value}));
     }
     drop(lock);
@@ -252,6 +253,7 @@ pub fn run(
         SecretsCommand::Set(_)
             | SecretsCommand::Enroll(_)
             | SecretsCommand::Reencrypt(_)
+            | SecretsCommand::Reset(_)
             | SecretsCommand::Remove(_)
             | SecretsCommand::Recipients(RecipientArgs {
                 command: RecipientCommand::Add(_) | RecipientCommand::Remove(_)
@@ -454,13 +456,63 @@ pub fn run(
             }
             seccy_macos::SecureEnclave.crypto_check(&identity)?;
             let public = envelope::from_identity(&identity)?;
-            let alias = enroll.name.unwrap_or(key.clone());
+            let alias = enroll.name.unwrap_or_else(|| {
+                if config
+                    .recipients
+                    .get(&key)
+                    .is_some_and(|old| old != &public)
+                {
+                    identity.key_id()
+                } else {
+                    key.clone()
+                }
+            });
             config.put_recipient(&alias, &public)?;
             state.keys.get_mut(&key).unwrap().secrets = true;
             // Enrollment is idempotent; a failed config write can be retried safely.
             state.save(paths)?;
             config.save()?;
-            output.emit(json!({"ok":true,"key":key,"name":alias,"recipient":public,"fingerprint":identity.fingerprint,"file":config.target}), &public)?;
+            output.emit(json!({"ok":true,"key":key,"name":alias,"recipient":public,"fingerprint":identity.fingerprint,"file":config.target}), &format!("Recipient {alias}: {public}"))?;
+        }
+        SecretsCommand::Reset(reset) => {
+            ensure!(
+                reset.from_env.is_none() || reset.name.is_some(),
+                "--from-env requires a secret name"
+            );
+            ensure!(
+                !reset.recipient.is_empty(),
+                "select replacement recipients explicitly with --recipient; enroll a new key first"
+            );
+            let (names, public) = recipients(&config, &reset.recipient)?;
+            let active = reset_targets(&config, reset.name.as_deref())?;
+            ensure!(!active.is_empty(), "no secrets in active file");
+            let mut env_value = reset.from_env.as_deref().map(secret_from_env).transpose()?;
+            crate::inventory::confirm(
+                reset.yes,
+                &format!(
+                    "Replace {} secret values in {}? Existing values will not be recovered. Check the file for other recipients and try reencrypt on a working recipient machine first.",
+                    active.len(),
+                    config.target.display()
+                ),
+            )?;
+            reset_values(
+                &mut config,
+                &active,
+                &names,
+                &public,
+                |name| {
+                    if let Some(value) = env_value.take() {
+                        return Ok(value);
+                    }
+                    eprintln!("Enter replacement value for {name}:");
+                    hidden()
+                },
+                seccy_macos::wrap_secret_key,
+            )?;
+            output.emit(
+                json!({"ok":true,"count":active.len(),"file":config.target,"recipients":names}),
+                &format!("Replaced and encrypted {} secrets", active.len()),
+            )?;
         }
         SecretsCommand::Reencrypt(selection) => {
             let (names, public) = recipients(&config, &selection.recipient)?;
@@ -472,7 +524,9 @@ pub fn run(
                 .collect();
             // All decryptions and encryptions succeed before the single atomic replacement.
             for (name, secret) in &active {
-                let clear = decrypt(name, secret, args.identity.as_deref(), &key_config)?;
+                let clear = decrypt(name, secret, args.identity.as_deref(), &key_config).with_context(|| format!(
+                    "cannot recover {name}; check this file for other recipients. On a working recipient machine, add/enroll the new public recipient and reencrypt. If none can decrypt, enroll a replacement and run secrets reset --recipient <new-alias> to re-enter values"
+                ))?;
                 let value = envelope::encrypt(name, &clear, &public, seccy_macos::wrap_secret_key)?;
                 config.put_secret(
                     name,
@@ -542,4 +596,255 @@ pub fn run(
         },
     }
     Ok(())
+}
+
+fn active_names(config: &Config) -> Vec<String> {
+    config
+        .secrets
+        .keys()
+        .filter(|name| config.origins[*name] == config.target)
+        .cloned()
+        .collect()
+}
+
+fn secret_from_env(name: &str) -> Result<Zeroizing<Vec<u8>>> {
+    use std::os::unix::ffi::OsStringExt;
+    ensure!(
+        envelope::valid_name(name),
+        "invalid environment variable name"
+    );
+    let value = std::env::var_os(name)
+        .with_context(|| format!("environment variable {name} is not set"))?;
+    let value = Zeroizing::new(value.into_vec());
+    ensure!(value.len() <= envelope::MAX_SECRET, "secret exceeds 64 KiB");
+    Ok(value)
+}
+
+fn reset_targets(config: &Config, selected: Option<&str>) -> Result<Vec<String>> {
+    if let Some(name) = selected {
+        ensure!(
+            config.origins.get(name) == Some(&config.target),
+            "secret is not defined in active file; use --secrets or --global"
+        );
+        Ok(vec![name.into()])
+    } else {
+        Ok(active_names(config))
+    }
+}
+
+fn reset_values(
+    config: &mut Config,
+    targets: &[String],
+    names: &[String],
+    public: &[String],
+    mut input: impl FnMut(&str) -> Result<Zeroizing<Vec<u8>>>,
+    mut wrap: impl FnMut(&str, &[u8]) -> Result<String>,
+) -> Result<()> {
+    // Collect only ciphertext until every prompt/encryption succeeds. A failed
+    // prompt, cancellation, or conflict leaves the original file intact.
+    let mut replacements = Vec::new();
+    for name in targets {
+        let clear = input(name)?;
+        let value = envelope::encrypt(name, &clear, public, &mut wrap)?;
+        replacements.push((
+            name.clone(),
+            Secret {
+                recipients: names.to_vec(),
+                value,
+            },
+        ));
+    }
+    for (name, secret) in replacements {
+        config.put_secret(&name, &secret);
+    }
+    config.save()
+}
+
+fn select_identity(
+    state: &State,
+    envelope: &envelope::Envelope,
+    selected: Option<&str>,
+) -> Result<String> {
+    state.keys.iter().filter(|(key, record)| record.secrets && record.mode == Mode::Prompt
+        && selected.is_none_or(|s| s == key.as_str() || record.alias.as_deref() == Some(s))
+        && record.fingerprint.as_ref().is_some_and(|f| envelope.wrapped.contains_key(f)))
+        .min_by_key(|(_, record)| record.retired)
+        .map(|(name, _)| name.clone())
+        .context("no enrolled local prompt key matches this secret; check the secrets file for other recipients, or select --identity")
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    fn public(seed: u8) -> String {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let point = p256::SecretKey::from_slice(&[seed; 32])
+            .unwrap()
+            .public_key();
+        envelope::recipient(point.to_encoded_point(false).as_bytes()).unwrap()
+    }
+    fn seed(global: &std::path::Path, file: &std::path::Path, names: &[&str]) {
+        let mut config = Config::load(global, file.parent().unwrap(), Some(file), false).unwrap();
+        config.put_recipient("old", &public(1)).unwrap();
+        for name in names {
+            let value = envelope::encrypt(name, b"old value", &[public(1)], |_, key| {
+                Ok(B64.encode(key))
+            })
+            .unwrap();
+            config.put_secret(
+                name,
+                &Secret {
+                    recipients: vec!["old".into()],
+                    value,
+                },
+            );
+        }
+        config.save().unwrap();
+    }
+
+    #[test]
+    fn reset_is_atomic_on_cancel_and_encryption_failure_and_scoped_to_selected_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let project = dir.path().join("seccy.toml");
+        seed(&global, &global, &["GLOBAL"]);
+        seed(&global, &project, &["FIRST", "SECOND"]);
+        let before = std::fs::read(&project).unwrap();
+        let global_before = std::fs::read(&global).unwrap();
+        let selected = vec!["new".into()];
+        let recipients = vec![public(2)];
+        for fail_input in [true, false] {
+            let mut config = Config::load(&global, dir.path(), Some(&project), false).unwrap();
+            config.put_recipient("new", &public(2)).unwrap();
+            let mut count = 0;
+            let mut wraps = 0;
+            let targets = active_names(&config);
+            assert!(
+                reset_values(
+                    &mut config,
+                    &targets,
+                    &selected,
+                    &recipients,
+                    |_| {
+                        count += 1;
+                        ensure!(!fail_input || count != 2, "cancelled");
+                        Ok(Zeroizing::new(b"new value".to_vec()))
+                    },
+                    |_, key| {
+                        wraps += 1;
+                        ensure!(fail_input || wraps != 2, "encryption failed");
+                        Ok(B64.encode(key))
+                    }
+                )
+                .is_err()
+            );
+            assert_eq!(std::fs::read(&project).unwrap(), before);
+            assert_eq!(std::fs::read(&global).unwrap(), global_before);
+        }
+        let mut config = Config::load(&global, dir.path(), None, false).unwrap();
+        config.put_recipient("new", &public(2)).unwrap();
+        let mut prompted = Vec::new();
+        let targets = active_names(&config);
+        reset_values(
+            &mut config,
+            &targets,
+            &selected,
+            &recipients,
+            |name| {
+                prompted.push(name.to_string());
+                Ok(Zeroizing::new(name.as_bytes().to_vec()))
+            },
+            |_, key| Ok(B64.encode(key)),
+        )
+        .unwrap();
+        assert_eq!(prompted, ["FIRST", "SECOND"]);
+        assert_eq!(std::fs::read(&global).unwrap(), global_before);
+        let updated = Config::load(&global, dir.path(), Some(&project), false).unwrap();
+        for (name, secret) in &updated.secrets {
+            assert_eq!(secret.recipients, selected);
+            let parsed = envelope::Envelope::parse(&secret.value, name).unwrap();
+            let key = B64.decode(parsed.wrapped.values().next().unwrap()).unwrap();
+            assert_eq!(&*parsed.decrypt(&key).unwrap(), name.as_bytes());
+        }
+        let project_after = std::fs::read(&project).unwrap();
+        let mut config = Config::load(&global, dir.path(), None, true).unwrap();
+        config.put_recipient("new", &public(2)).unwrap();
+        let targets = active_names(&config);
+        reset_values(
+            &mut config,
+            &targets,
+            &selected,
+            &recipients,
+            |name| {
+                assert_eq!(name, "GLOBAL");
+                Ok(Zeroizing::new(b"global replacement".to_vec()))
+            },
+            |_, key| Ok(B64.encode(key)),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&project).unwrap(), project_after);
+    }
+
+    #[test]
+    fn reset_one_secret_keeps_other_and_inherited_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let global = dir.path().join("global.toml");
+        let project = dir.path().join("seccy.toml");
+        seed(&global, &global, &["INHERITED"]);
+        seed(&global, &project, &["FIRST", "SECOND"]);
+        let mut config = Config::load(&global, dir.path(), None, false).unwrap();
+        let second = config.secrets["SECOND"].value.clone();
+        assert!(reset_targets(&config, Some("MISSING")).is_err());
+        assert!(reset_targets(&config, Some("INHERITED")).is_err());
+        let targets = reset_targets(&config, Some("FIRST")).unwrap();
+        reset_values(
+            &mut config,
+            &targets,
+            &["old".into()],
+            &[public(1)],
+            |name| {
+                assert_eq!(name, "FIRST");
+                Ok(Zeroizing::new(b"replacement".to_vec()))
+            },
+            |_, key| Ok(B64.encode(key)),
+        )
+        .unwrap();
+        let updated = Config::load(&global, dir.path(), None, false).unwrap();
+        assert_eq!(updated.secrets["SECOND"].value, second);
+        assert_eq!(updated.origins["INHERITED"], global);
+    }
+
+    #[test]
+    fn retained_generation_selected_by_ciphertext_not_reused_alias() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("seccy.toml");
+        seed(&file, &file, &["TOKEN"]);
+        let config = Config::load(&file, dir.path(), Some(&file), false).unwrap();
+        let parsed = envelope::Envelope::parse(&config.secrets["TOKEN"].value, "TOKEN").unwrap();
+        let mut state = State::default();
+        state
+            .overlay(
+                &seccy_core::Config::parse("[keys.auth]\nmode='prompt'").unwrap(),
+                &file,
+            )
+            .unwrap();
+        let record = state.keys.get_mut("auth").unwrap();
+        record.secrets = true;
+        record.fingerprint = Some(envelope::fingerprint(&public(1)).unwrap());
+        let mut retired = record.clone();
+        retired.retired = true;
+        retired.alias = Some("auth".into());
+        state.keys.get_mut("auth").unwrap().fingerprint =
+            Some(envelope::fingerprint(&public(2)).unwrap());
+        state.keys.insert("old-generation".into(), retired);
+        assert_eq!(
+            select_identity(&state, &parsed, None).unwrap(),
+            "old-generation"
+        );
+        assert_eq!(
+            select_identity(&state, &parsed, Some("auth")).unwrap(),
+            "old-generation"
+        );
+        assert!(select_identity(&state, &parsed, Some("unrelated")).is_err());
+    }
 }
