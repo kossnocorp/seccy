@@ -947,7 +947,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_cli"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_linux"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_macos"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
