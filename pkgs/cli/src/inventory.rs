@@ -866,7 +866,7 @@ pub fn run(
                 ),
             )?;
         }
-        Commands::Reset(args) => confirm(
+        Commands::Purge(args) => confirm(
             args.yes,
             "Permanently delete ALL seccy keys and registry entries?",
         )?,
@@ -1021,7 +1021,7 @@ pub fn run(
                 "Key removed",
             )?;
         }
-        Commands::Reset(_) => {
+        Commands::Purge(_) => {
             let mut names: std::collections::BTreeSet<_> = state.keys.keys().cloned().collect();
             names.extend(
                 state

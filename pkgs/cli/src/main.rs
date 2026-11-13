@@ -102,7 +102,7 @@ enum Commands {
     /// Delete a key from the registry, public files, and Keychain
     Remove(RemoveArgs),
     /// Delete all seccy keys and registry entries; preserve source configs
-    Reset(ConfirmArgs),
+    Purge(ConfirmArgs),
     /// Manage the per-user login service
     Service(ServiceArgs),
     /// Manage GitHub SSH keys using gh
@@ -466,7 +466,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         Commands::Decrypt(_) => "decrypt",
         Commands::CryptoCheck(_) => "crypto-check",
         Commands::Remove(_) => "remove",
-        Commands::Reset(_) => "reset",
+        Commands::Purge(_) => "purge",
         Commands::Service(_) => "service",
         Commands::Gh(_) => "gh",
     };
@@ -476,7 +476,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         Commands::Agent(_)
             | Commands::Service(_)
             | Commands::Remove(_)
-            | Commands::Reset(_)
+            | Commands::Purge(_)
             | Commands::Rebuild(_)
             | Commands::Decrypt(_)
             | Commands::CryptoCheck(_)
@@ -516,7 +516,7 @@ fn run_platform(
         | Commands::Get(_)
         | Commands::Sync(_)
         | Commands::Remove(_)
-        | Commands::Reset(_)) => {
+        | Commands::Purge(_)) => {
             inventory::run(command, &config, &paths.config, paths, output)?;
         }
         Commands::Service(args) => service::run(args.command, paths, output)?,

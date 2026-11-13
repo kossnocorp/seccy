@@ -171,7 +171,7 @@ FIDO verification. Public-key encryption and public inventory inspection do not.
 No unlock secret is cached across operations. Completed provisioning is
 idempotent; interrupted Secret Service writes are journaled in the private vault
 metadata and resumed by `provision`. Missing persisted key blobs fail rather than
-silently replacing a key. `reset` removes managed SSH/encryption keys while
+silently replacing a key. `purge` removes managed SSH/encryption keys while
 retaining the vault's FIDO enrollment, service, configs, and logs.
 
 ## Login service
@@ -236,7 +236,7 @@ SSH agent's environment. GUI and terminal clients must select Seccy's socket.
 Losing/resetting the authenticator, clearing/replacing the TPM, or losing the
 encrypted keychain records can make keys and ciphertext unrecoverable. There is
 no recovery recipient or second-authenticator enrollment in this version.
-`reset` deletes records; copies of previously backed-up encrypted records are not
+`purge` deletes records; copies of previously backed-up encrypted records are not
 cryptographically revoked by deleting the current copies.
 
 ## Verification

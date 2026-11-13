@@ -14,7 +14,7 @@ fn destructive_commands_require_confirmation_and_accept_both_yes_flags() {
     let config = dir.path().join("config/seccy/config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(&config, "[keys.example]\nmode = 'notify'\n").unwrap();
-    for command in [vec!["remove", "example"], vec!["reset"]] {
+    for command in [vec!["remove", "example"], vec!["purge"]] {
         for flag in [None, Some("-y"), Some("--yes")] {
             let mut cmd = Command::new(env!("CARGO_BIN_EXE_seccy"));
             cmd.args(&command)

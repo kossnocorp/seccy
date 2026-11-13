@@ -233,12 +233,12 @@ For Touch ID enrollment changes and secret recovery, see
 ```sh
 seccy remove personal        # asks for confirmation, default No
 seccy remove personal -y     # --yes also skips confirmation
-seccy reset                 # asks before deleting all seccy-managed keys
-seccy reset --yes
+seccy purge                 # asks before deleting all seccy-managed keys
+seccy purge --yes
 ```
 
 Removal deletes private-key material, exported public files, and registry entries.
-Reset also discovers orphaned seccy-labelled Keychain keys and exported public
+Purge also discovers orphaned seccy-labelled Keychain keys and exported public
 files. Both preserve source configs, logs, and service registration. A key still
 in the current config appears as unprovisioned after removal. Non-interactive
 invocations require `-y`/`--yes`; prompts go to stderr, preserving JSON stdout.
@@ -259,7 +259,7 @@ displayed inventory. Events in the normal JSON log file are:
 - `inventory_view`: merged `state_json`, plus `config_json` and `config_path`.
 - `inventory_result`: the command's exact structured output as `result_json`.
 - `state_saved`: `state_json` after a successful registry write (including
-  provision/remove/reset changes).
+  provision/remove/purge changes).
 - `state_cache_hit`: the agent reused an unchanged parsed registry.
 
 These JSON fields are encoded as strings, like `caller_json`. For example:

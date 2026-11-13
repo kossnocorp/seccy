@@ -73,7 +73,7 @@ fn queries_override_json_and_preserve_jq_stream_semantics() {
 #[test]
 fn invalid_queries_fail_before_command_execution() {
     for query in [".[", "unknown_function"] {
-        let result = run(&["reset", "--yes", "--json", "--jq", query]);
+        let result = run(&["purge", "--yes", "--json", "--jq", query]);
         assert!(!result.status.success());
         assert!(result.stdout.is_empty());
         assert!(String::from_utf8_lossy(&result.stderr).contains("query:"));
@@ -96,7 +96,7 @@ fn raw_queries_handle_strings_json_and_parser_responses() {
     let result = run(&["unknown", "--jq-raw=\"raw error\""]);
     assert!(!result.status.success());
     assert_eq!(result.stdout, b"raw error\n");
-    let result = run(&["reset", "--yes", "--jq-raw", ".["]);
+    let result = run(&["purge", "--yes", "--jq-raw", ".["]);
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("query:"));
     let result = run(&["--help", "--jq", ".", "--jq-raw", "."]);
@@ -122,7 +122,7 @@ fn raw_queries_work_on_command_results() {
 fn command_errors_are_filtered_but_query_errors_are_not() {
     for command in [
         vec!["remove", "missing"],
-        vec!["reset"],
+        vec!["purge"],
         vec!["encrypt", "missing"],
         vec!["crypto-check", "missing"],
     ] {
