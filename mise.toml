@@ -160,6 +160,30 @@ git push
 git push --tags
 '''
 
+[tasks."release/cli:rollback"]
+description = "Remove a CLI version's local tag, origin tag, and GitHub release if present"
+usage = '''
+arg "<version>" help="Release version (X.Y.Z)" validate="value matches '^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$'" validate_error="Expected a version in X.Y.Z format (no leading zeros)"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+tag="cli@$usage_version"
+if git show-ref --verify --quiet "refs/tags/$tag"; then
+  git tag --delete "$tag"
+fi
+remote_tag=$(git ls-remote --tags origin "refs/tags/$tag")
+if [[ -n "$remote_tag" ]]; then
+  git push origin --delete "refs/tags/$tag"
+fi
+if release=$(gh api "repos/kossnocorp/seccy/releases/tags/$tag" 2>&1); then
+  gh release delete "$tag" --repo kossnocorp/seccy --yes
+elif [[ "$release" != *"(HTTP 404)"* ]]; then
+  printf '%s\n' "$release" >&2
+  exit 1
+fi
+'''
+
 [tasks."release:version"]
 description = "Tag the next website version for today (YYYY-MM-DD.N) locally"
 run = '''
