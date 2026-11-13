@@ -67,7 +67,9 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     struct Generations(Store);
+    #[cfg(target_os = "macos")]
     impl KeyStore for Generations {
         fn create_generation(&self, name: &str, mode: Mode) -> Result<Identity> {
             use p256::elliptic_curve::sec1::ToEncodedPoint;

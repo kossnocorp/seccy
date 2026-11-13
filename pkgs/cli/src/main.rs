@@ -370,6 +370,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         return activate::run(args.shell_type.as_deref(), output);
     }
     let mut paths = seccy_core::storage::Paths::from_env()?;
+    #[cfg(target_os = "macos")]
     let global_secrets = app
         .global_secrets
         .as_ref()
