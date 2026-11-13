@@ -343,7 +343,7 @@ resolved location.
 
 Empty and relative XDG values are ignored, as required by the XDG specification. Socket and lock directories are owner-only. Existing `~/.seccy` sockets are no longer used. Public files can be regenerated with `sync`; private keys remain in the keychain.
 
-Touch ID uses `biometryCurrentSet` plus `privateKeyUsage`: password fallback is not enabled, and changing enrolled fingerprints invalidates access. Notification-only keys use `privateKeyUsage`. Both modes require an unlocked device and use device-only keychain protection.
+New prompt keys default to `verify = "biometry-any"` plus `privateKeyUsage`, so adding or removing fingerprints does not invalidate them. Set `verify = "user-presence"` to allow system password fallback, or `verify = "biometry-current-set"` to invalidate access when enrolled fingerprints change. Existing keys retain their creation policy; changing it requires `seccy rebuild NAME`. Notification-only keys use `privateKeyUsage`. Both modes require an unlocked device and use device-only keychain protection.
 
 Notifications are submitted via `/usr/bin/osascript`; enable notifications for that sender in macOS. macOS notification settings and Focus can suppress banners. Failure to submit a notification causes the agent to withhold the signature. Agent events also record successful signature responses.
 

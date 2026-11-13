@@ -247,13 +247,18 @@ rejected without private operations.
 
 ## Touch ID changes and recovery
 
-Seccy prompt keys use Apple's
+Older Seccy prompt keys, and new keys explicitly configured with
+`verify = "biometry-current-set"`, use Apple's
 [`biometryCurrentSet`](https://developer.apple.com/documentation/security/secaccesscontrolcreateflags/biometrycurrentset).
 Adding **or removing** a fingerprint invalidates keys protected with this policy.
 Removing the newly added finger, restarting the agent, or entering a password
 does not restore an invalidated key. Secure Enclave private keys
 [cannot be exported or imported](https://developer.apple.com/documentation/security/protecting-keys-with-the-secure-enclave).
-Seccy does not weaken this policy to `biometryAny` or add password fallback.
+New prompt keys default to `verify = "biometry-any"`, which survives fingerprint
+enrollment changes. `verify = "user-presence"` additionally permits system password
+fallback. These creation-time settings never modify an existing key. Set `verify`
+in the key or its provider profile and run `seccy rebuild NAME` to create a new
+generation using that policy; see [provider configuration](providers.md).
 
 CryptoTokenKit `-3` means corrupted data, not definitive evidence of changed
 enrollment. Seccy therefore reports enrollment changes as a possible cause,

@@ -42,6 +42,25 @@ pub struct Record {
     pub fingerprint: Option<String>,
 }
 
+impl Record {
+    pub fn pinned_policy(&self) -> crate::config::Resolved {
+        let mut policy = self.policy.clone().unwrap_or(crate::config::Resolved {
+            kind: crate::config::platform_kind().into(),
+            mode: self.mode,
+            auth: None,
+            verify: None,
+            slot: None,
+            algorithm: None,
+        });
+        if policy.kind == "secure-enclave" && policy.mode == Mode::Prompt {
+            policy
+                .verify
+                .get_or_insert_with(|| "biometry-current-set".into());
+        }
+        policy
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct State {
@@ -154,8 +173,7 @@ impl State {
                 let policy = config.resolve(name)?;
                 policy.ensure_available()?;
                 ensure!(
-                    policy.mode == record.mode
-                        && record.policy.as_ref().is_none_or(|old| old == &policy),
+                    policy.mode == record.mode && policy.matches_existing(&record.pinned_policy()),
                     "migration_required: provider policy changed for {name}"
                 );
             }
@@ -208,7 +226,7 @@ impl State {
         let identity = self.identity(store, name)?;
         let mut info = KeyInfo::new(name, record.mode, identity.as_ref(), paths)?;
         info.secrets = record.secrets;
-        info.provider = record.policy.clone();
+        info.provider = Some(record.pinned_policy());
         info.uses = record.uses.clone();
         info.display_name = record.display_name.clone();
         info.retired = record.retired;

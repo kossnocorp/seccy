@@ -294,6 +294,14 @@ impl Caller {
 
 /// Implementations return ASN.1 DER ECDSA signatures over SHA-256(message).
 pub trait KeyStore {
+    fn create_generation_with_policy(
+        &self,
+        name: &str,
+        policy: &config::Resolved,
+    ) -> Result<Identity> {
+        self.create_generation(name, policy.mode)
+    }
+
     /// Create a fresh immutable generation without deleting/rebinding existing keys.
     fn create_generation(&self, _name: &str, _mode: Mode) -> Result<Identity> {
         anyhow::bail!("this backend does not support key rebuilding")

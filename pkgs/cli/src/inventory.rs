@@ -96,6 +96,80 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
+    fn verification_is_pinned_and_rebuild_reads_new_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
+        fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+        fs::create_dir_all(&paths.state).unwrap();
+        let store = Generations(Store::default());
+        let source = "[keys.auth]\nuse='ssh-auth'";
+        fs::write(&paths.config, source).unwrap();
+        let mut state = State::default();
+        provision(
+            &store,
+            &Config::parse(source).unwrap(),
+            &paths.config,
+            &paths,
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(
+            state.keys["auth"].pinned_policy().verify.as_deref(),
+            Some("biometry-any")
+        );
+        // Old registries omitted verify: preserve current-set without silently replacing it.
+        state
+            .keys
+            .get_mut("auth")
+            .unwrap()
+            .policy
+            .as_mut()
+            .unwrap()
+            .verify = None;
+        provision(
+            &store,
+            &Config::parse(source).unwrap(),
+            &paths.config,
+            &paths,
+            &mut state,
+        )
+        .unwrap();
+        assert_eq!(
+            state.keys["auth"].pinned_policy().verify.as_deref(),
+            Some("biometry-current-set")
+        );
+        let changed = format!("{source}\nverify='user-presence'");
+        fs::write(&paths.config, &changed).unwrap();
+        assert!(
+            provision(
+                &store,
+                &Config::parse(&changed).unwrap(),
+                &paths.config,
+                &paths,
+                &mut state
+            )
+            .is_err()
+        );
+        let (_, retired) = rebuild(&store, &mut state, "auth", None).unwrap();
+        assert_eq!(
+            state.keys["auth"].pinned_policy().verify.as_deref(),
+            Some("user-presence")
+        );
+        assert_eq!(
+            state.keys[&retired].pinned_policy().verify.as_deref(),
+            Some("biometry-current-set")
+        );
+        assert!(state.identity(&store, "auth").unwrap().is_some());
+        fs::write(&paths.config, source).unwrap();
+        rebuild(&store, &mut state, "auth", None).unwrap();
+        assert_eq!(
+            state.keys["auth"].pinned_policy().verify.as_deref(),
+            Some("biometry-any")
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
     fn rebuild_reuses_alias_preserves_legacy_and_generations_and_supports_mode_change() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::resolve(Some(dir.path()), |_| None).unwrap();
@@ -529,7 +603,7 @@ fn provision(
                 "configuration names a retired generation; use its active alias"
             );
             ensure!(
-                old.mode == policy.mode && old.policy.as_ref().is_none_or(|p| p == &policy),
+                old.mode == policy.mode && policy.matches_existing(&old.pinned_policy()),
                 "migration_required: key {name} provider or mode changed; preserve the old key and migrate explicitly"
             );
         }
@@ -554,6 +628,33 @@ fn provision(
         } else {
             store.identity(binding, record.mode)?
         };
+        let creation_policy = if config.keys.contains_key(name) {
+            config.resolve(name)?.for_creation()
+        } else {
+            record
+                .policy
+                .clone()
+                .unwrap_or_else(|| record.pinned_policy())
+                .for_creation()
+        };
+        let actual_policy = if existing.is_some() {
+            let mut pinned = state.keys.get(name).unwrap_or(record).pinned_policy();
+            if !state.keys.contains_key(name)
+                && pinned.kind == "secure-enclave"
+                && pinned.mode == seccy_core::Mode::Prompt
+            {
+                pinned.verify = Some("biometry-current-set".into());
+            }
+            if config.keys.contains_key(name) {
+                ensure!(
+                    config.resolve(name)?.matches_existing(&pinned),
+                    "migration_required: existing key verification policy differs; use seccy rebuild {name}"
+                );
+            }
+            pinned
+        } else {
+            creation_policy.clone()
+        };
         let (identity, created) = if let Some(identity) = existing {
             ensure!(
                 record
@@ -569,7 +670,10 @@ fn provision(
                 record.fingerprint.is_none(),
                 "key {name} is missing; use seccy rebuild {name} for explicit replacement"
             );
-            (store.create_generation(name, record.mode)?, true)
+            (
+                store.create_generation_with_policy(name, &creation_policy)?,
+                true,
+            )
         };
         let identity = identity.with_name(name);
         let email = if config.keys.contains_key(name) {
@@ -586,26 +690,7 @@ fn provision(
                     .get(name)
                     .and_then(|k| k.name.clone())
                     .or_else(|| record.display_name.clone()),
-                policy: Some(
-                    config
-                        .keys
-                        .get(name)
-                        .map(|_| config.resolve(name))
-                        .transpose()?
-                        .unwrap_or_else(|| {
-                            record
-                                .policy
-                                .clone()
-                                .unwrap_or(seccy_core::config::Resolved {
-                                    kind: seccy_core::config::platform_kind().into(),
-                                    mode: record.mode,
-                                    auth: None,
-                                    verify: None,
-                                    slot: None,
-                                    algorithm: None,
-                                })
-                        }),
-                ),
+                policy: Some(actual_policy),
                 uses: config.keys.get(name).map_or_else(
                     || record.uses.clone(),
                     |k| k.uses.clone().or_else(|| record.uses.clone()),
@@ -710,8 +795,27 @@ fn rebuild(
                     .is_none_or(|u| !u.0.contains(&seccy_core::config::Use::Secrets))),
         "notify mode is not supported for this provider or secrets usage"
     );
+    let source_config = Config::load(&old.config)?;
+    let mut policy = if source_config.keys.contains_key(name) {
+        source_config.resolve(name)?
+    } else {
+        let mut policy = old.pinned_policy();
+        policy.verify = None;
+        policy
+    };
+    ensure!(
+        policy.kind == old.pinned_policy().kind,
+        "cross-provider rebuilding is not supported"
+    );
+    policy.mode = replacement_mode;
+    ensure!(
+        policy.mode != seccy_core::Mode::Notify || policy.verify.is_none(),
+        "notify mode does not accept verify"
+    );
+    let policy = policy.for_creation();
+    policy.ensure_available()?;
     let identity = store
-        .create_generation(name, replacement_mode)?
+        .create_generation_with_policy(name, &policy)?
         .with_name(name)
         .with_email(old.email.as_deref());
     ensure!(
@@ -725,9 +829,7 @@ fn rebuild(
     let mut replacement = old;
     replacement.storage_id = Some(identity.storage_id.clone());
     replacement.mode = identity.mode;
-    if let Some(policy) = &mut replacement.policy {
-        policy.mode = identity.mode;
-    }
+    replacement.policy = Some(policy);
     replacement.public_key = Some(identity.public_key.clone());
     replacement.fingerprint = Some(identity.fingerprint.clone());
     replacement.secrets = false;

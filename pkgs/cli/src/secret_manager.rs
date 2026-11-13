@@ -128,8 +128,7 @@ fn check_configured_identity(config: &seccy_core::Config, state: &State, name: &
             policy.ensure_available()?;
             if let Some(record) = record {
                 ensure!(
-                    record.mode == policy.mode
-                        && record.policy.as_ref().is_none_or(|old| old == &policy),
+                    record.mode == policy.mode && policy.matches_existing(&record.pinned_policy()),
                     "migration_required: selected config does not match enrolled identity"
                 );
             }

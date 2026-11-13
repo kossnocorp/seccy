@@ -401,7 +401,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         let host = seccy_core::config::hostname()?;
         let keys = config.keys.keys().map(|name| {
             match config.resolve_for(name, std::env::consts::OS, &host) {
-                Ok(resolved) => {let availability = resolved.ensure_available().err().map(|e|e.to_string());json!({"name":name,"provider":resolved,"available":availability.is_none(),"error":availability})},
+                Ok(resolved) => {let resolved = resolved.for_creation(); let availability = resolved.ensure_available().err().map(|e|e.to_string());json!({"name":name,"provider":resolved,"available":availability.is_none(),"error":availability})},
                 Err(e) => json!({"name":name,"available":false,"error":format!("{e:#}")}),
             }
         }).collect::<Vec<_>>();

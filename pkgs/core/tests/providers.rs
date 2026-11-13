@@ -187,3 +187,51 @@ fn local_kind_changes_do_not_retain_parameters_from_other_providers() {
     .unwrap();
     assert!(Config::load(&base).is_err());
 }
+
+#[test]
+fn secure_enclave_verification_defaults_overrides_and_legacy_pinning() {
+    let c = Config::parse("[keys.auth]\nuse='ssh-auth'\n[keys.signing]\nuse='ssh-sign'\n[keys.secrets]\nuse='secrets'").unwrap();
+    for name in ["auth", "signing", "secrets"] {
+        let requested = c.resolve_for(name, "macos", "host").unwrap();
+        assert_eq!(
+            requested.clone().for_creation().verify.as_deref(),
+            Some("biometry-any")
+        );
+        let mut legacy = requested.clone();
+        legacy.verify = None;
+        assert!(requested.matches_existing(&legacy));
+        assert!(!requested.for_creation().matches_existing(&legacy));
+    }
+    for value in ["biometry-any", "user-presence", "biometry-current-set"] {
+        let c = Config::parse(&format!("provider='mac'\n[providers.mac]\nkind='secure-enclave'\nverify='{value}'\n[keys.auth]\n[keys.signing]\nverify='user-presence'")).unwrap();
+        assert_eq!(
+            c.resolve_for("auth", "macos", "h")
+                .unwrap()
+                .for_creation()
+                .verify
+                .as_deref(),
+            Some(value)
+        );
+        assert_eq!(
+            c.resolve_for("signing", "macos", "h")
+                .unwrap()
+                .verify
+                .as_deref(),
+            Some("user-presence")
+        );
+    }
+    for text in [
+        "[keys.auth]\nmode='notify'\nverify='biometry-any'",
+        "mode='notify'\n[keys.auth]\nverify='user-presence'",
+        "[keys.auth]\nkind='piv'\nverify='biometry-any'",
+        "[keys.auth]\nkind='tpm-fido2-hmac'\nverify='user-presence'",
+        "[keys.auth]\nverify='biometryAny'",
+    ] {
+        assert!(
+            Config::parse(text)
+                .and_then(|c| c.resolve_for("auth", "macos", "h"))
+                .is_err(),
+            "{text}"
+        );
+    }
+}

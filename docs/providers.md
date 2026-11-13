@@ -70,8 +70,34 @@ A key cannot declare both `kind` and `provider`. Inline `kind` bypasses the root
 selector. Supported parameter overrides resolve key → named provider → implementation
 default; mode resolves key → named provider → root → prompt. Parameters include
 `auth`, `mode`, `verify`, `slot`, and `algorithm`, but only when supported by that kind.
-For example, Secure Enclave rejects `auth`, `verify`, and `slot`; it supports P-256
-and prompt/notify modes. Arbitrary combinations are rejected.
+Secure Enclave supports P-256 and prompt/notify modes, and rejects `auth` and `slot`.
+For prompt keys, `verify` accepts `biometry-any` (the default for every new key),
+`user-presence` (biometrics or system password), and `biometry-current-set`
+(invalidated by fingerprint enrollment changes). Explicit `verify` with notify mode
+is rejected. Other provider kinds retain their own verification choices.
+
+```toml
+[keys.auth]
+use = "ssh-auth"
+
+[keys.signing]
+use = "ssh-sign"
+verify = "user-presence"
+
+[keys.secrets]
+use = "secrets"
+```
+
+On macOS this uses Secure Enclave automatically. Auth and secrets use `biometry-any`;
+signing explicitly overrides it. A named provider can set a shared `verify` choice,
+and each key can override it. There is no root-level `verify` field.
+
+Verification is pinned when the key is created and shown in key inspection. Existing
+keys without recorded verification retain `biometry-current-set`; omitting `verify`
+does not change them. To change an existing key, set `verify` and run
+`seccy rebuild NAME`. Rebuild reads that key's registered source configuration and
+creates a new generation; an omitted `verify` uses `biometry-any`. Retired generations
+keep their original policy and ciphertext remains unchanged.
 
 ## Availability and inspection
 

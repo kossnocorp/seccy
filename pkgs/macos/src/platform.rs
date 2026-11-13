@@ -11,7 +11,8 @@ use security_framework::{
     key::{Algorithm, GenerateKeyOptions, KeyType, SecKey, Token},
 };
 use security_framework_sys::access_control::{
-    kSecAccessControlBiometryCurrentSet, kSecAccessControlPrivateKeyUsage,
+    kSecAccessControlBiometryAny, kSecAccessControlBiometryCurrentSet,
+    kSecAccessControlPrivateKeyUsage, kSecAccessControlUserPresence,
 };
 use std::{
     os::{fd::AsRawFd, unix::net::UnixStream},
@@ -330,7 +331,6 @@ fn authentication_context(mode: Mode, details: &str) -> Option<Retained<LAContex
     unsafe {
         context.setLocalizedReason(&NSString::from_str(details));
         context.setTouchIDAuthenticationAllowableReuseDuration(0.0);
-        context.setLocalizedFallbackTitle(Some(&NSString::from_str("")));
     }
     Some(context)
 }
@@ -379,59 +379,23 @@ fn identity(key: &SecKey, name: &str, mode: Mode) -> Result<Identity> {
 
 impl KeyStore for SecureEnclave {
     fn create_generation(&self, name: &str, mode: Mode) -> Result<Identity> {
-        use security_framework::item::{ItemUpdateOptions, update_item};
-        // The fingerprint is only known after hardware creation. Keep a unique
-        // pending label until it can be rebound; a failure never touches old keys.
-        let pending = seccy_core::pending_key_id();
-        let (mut identity, created) = self.provision(&pending, mode)?;
-        ensure!(created, "pending key collision");
-        let id = identity.key_id();
-        ensure!(
-            lookup(&id, mode)?.is_none(),
-            "key fingerprint already exists"
-        );
-        update_item(
-            ItemSearchOptions::new()
-                .key_class(KeyClass::private())
-                .label(&label(&pending, mode))
-                .case_insensitive(Some(false))
-                .ignore_legacy_keychains(),
-            ItemUpdateOptions::new().set_label(label(&id, mode)),
-        )?;
-        identity.storage_id = id;
-        Ok(identity.with_name(name))
+        self.create_with_verification(name, mode, "biometry-any")
+    }
+
+    fn create_generation_with_policy(
+        &self,
+        name: &str,
+        policy: &seccy_core::config::Resolved,
+    ) -> Result<Identity> {
+        self.create_with_verification(
+            name,
+            policy.mode,
+            policy.verify.as_deref().unwrap_or("biometry-any"),
+        )
     }
 
     fn provision(&self, name: &str, mode: Mode) -> Result<(Identity, bool)> {
-        let other = match mode {
-            Mode::Prompt => Mode::Notify,
-            Mode::Notify => Mode::Prompt,
-        };
-        ensure!(
-            lookup(name, other)?.is_none(),
-            "key {name} already exists with another mode; use a new name to rotate it"
-        );
-        if let Some(key) = lookup(name, mode)? {
-            return Ok((identity(&key, name, mode)?, false));
-        }
-        let mut flags = kSecAccessControlPrivateKeyUsage;
-        if mode == Mode::Prompt {
-            flags |= kSecAccessControlBiometryCurrentSet;
-        }
-        let access = SecAccessControl::create_with_protection(
-            Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
-            flags,
-        )?;
-        let mut options = GenerateKeyOptions::default();
-        options
-            .set_key_type(KeyType::ec_sec_prime_random())
-            .set_size_in_bits(256)
-            .set_token(Token::SecureEnclave)
-            .set_label(label(name, mode))
-            .set_location(Location::DataProtectionKeychain)
-            .set_access_control(access);
-        let key = SecKey::new(&options).map_err(|e| anyhow!("create Secure Enclave key: {e}"))?;
-        Ok((identity(&key, name, mode)?, true))
+        self.provision_with_verification(name, mode, "biometry-any")
     }
 
     fn identity(&self, name: &str, mode: Mode) -> Result<Option<Identity>> {
@@ -449,7 +413,7 @@ impl KeyStore for SecureEnclave {
     ) -> Result<Vec<u8>> {
         let details = expected.sign_description(message.len(), caller, payload);
         // Fresh context for every signature, attached to the actual key operation.
-        // Keychain ACLs still enforce biometryCurrentSet; this only customizes UI.
+        // Keychain ACLs still enforce the creation-time verification policy; this only customizes UI.
         let context = authentication_context(expected.mode, &details);
         let cf_context = as_cf_context(&context);
         let key = lookup_with_context(&expected.storage_id, expected.mode, cf_context)?
@@ -477,10 +441,10 @@ fn invalidation_hint(mode: Mode, domain: &str, code: isize) -> Option<&'static s
     }
     match code {
         -3 => Some(
-            "Touch ID enrollment may have changed, or key data is damaged. Adding/removing fingerprints permanently invalidates seccy prompt keys.",
+            "Touch ID enrollment may have changed, or key data is damaged. Adding/removing fingerprints invalidates keys created with biometry-current-set.",
         ),
         -10 => Some(
-            "The device key was invalidated. A Touch ID enrollment change can permanently invalidate seccy prompt keys.",
+            "The device key was invalidated. A Touch ID enrollment change can invalidate keys created with biometry-current-set.",
         ),
         _ => None,
     }
@@ -805,5 +769,73 @@ mod tests {
             process.executable.unwrap(),
             std::env::current_exe().unwrap().to_string_lossy()
         );
+    }
+}
+
+impl SecureEnclave {
+    fn create_with_verification(&self, name: &str, mode: Mode, verify: &str) -> Result<Identity> {
+        use security_framework::item::{ItemUpdateOptions, update_item};
+        // The fingerprint is only known after hardware creation. Keep a unique
+        // pending label until it can be rebound; a failure never touches old keys.
+        let pending = seccy_core::pending_key_id();
+        let (mut identity, created) = self.provision_with_verification(&pending, mode, verify)?;
+        ensure!(created, "pending key collision");
+        let id = identity.key_id();
+        ensure!(
+            lookup(&id, mode)?.is_none(),
+            "key fingerprint already exists"
+        );
+        update_item(
+            ItemSearchOptions::new()
+                .key_class(KeyClass::private())
+                .label(&label(&pending, mode))
+                .case_insensitive(Some(false))
+                .ignore_legacy_keychains(),
+            ItemUpdateOptions::new().set_label(label(&id, mode)),
+        )?;
+        identity.storage_id = id;
+        Ok(identity.with_name(name))
+    }
+
+    fn provision_with_verification(
+        &self,
+        name: &str,
+        mode: Mode,
+        verify: &str,
+    ) -> Result<(Identity, bool)> {
+        let other = match mode {
+            Mode::Prompt => Mode::Notify,
+            Mode::Notify => Mode::Prompt,
+        };
+        ensure!(
+            lookup(name, other)?.is_none(),
+            "key {name} already exists with another mode; use a new name to rotate it"
+        );
+        if let Some(key) = lookup(name, mode)? {
+            return Ok((identity(&key, name, mode)?, false));
+        }
+        let mut flags = kSecAccessControlPrivateKeyUsage;
+        if mode == Mode::Prompt {
+            flags |= match verify {
+                "biometry-any" => kSecAccessControlBiometryAny,
+                "user-presence" => kSecAccessControlUserPresence,
+                "biometry-current-set" => kSecAccessControlBiometryCurrentSet,
+                _ => bail!("unsupported verification policy {verify}"),
+            };
+        }
+        let access = SecAccessControl::create_with_protection(
+            Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
+            flags,
+        )?;
+        let mut options = GenerateKeyOptions::default();
+        options
+            .set_key_type(KeyType::ec_sec_prime_random())
+            .set_size_in_bits(256)
+            .set_token(Token::SecureEnclave)
+            .set_label(label(name, mode))
+            .set_location(Location::DataProtectionKeychain)
+            .set_access_control(access);
+        let key = SecKey::new(&options).map_err(|e| anyhow!("create Secure Enclave key: {e}"))?;
+        Ok((identity(&key, name, mode)?, true))
     }
 }

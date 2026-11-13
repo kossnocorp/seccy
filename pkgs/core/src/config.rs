@@ -451,13 +451,19 @@ impl Config {
             );
         }
         ensure!(
-            p.verify.is_none() || p.kind == "piv",
+            p.verify.is_none() || matches!(p.kind.as_str(), "piv" | "secure-enclave"),
             "provider {} does not accept verify",
             p.kind
         );
         if let Some(v) = &p.verify {
             ensure!(
-                matches!(v.as_str(), "pin-touch" | "biometric-or-pin-touch"),
+                match p.kind.as_str() {
+                    "secure-enclave" => matches!(
+                        v.as_str(),
+                        "biometry-any" | "user-presence" | "biometry-current-set"
+                    ),
+                    _ => matches!(v.as_str(), "pin-touch" | "biometric-or-pin-touch"),
+                },
                 "unsupported verification policy {v}"
             );
         }
@@ -507,6 +513,10 @@ impl Config {
         let p = self.parameters(k, selected);
         self.validate_parameters(&p)?;
         let mode = p.mode.unwrap_or(Mode::Prompt);
+        ensure!(
+            mode != Mode::Notify || p.verify.is_none(),
+            "notify mode does not accept verify"
+        );
         ensure!(
             k.bind.is_none() || !matches!(p.kind.as_str(), "secure-enclave" | "tpm-fido2-hmac"),
             "existing machine providers do not accept portable bind"
@@ -624,6 +634,28 @@ impl Config {
     }
 }
 impl Resolved {
+    /// Defaults apply at creation only. An omitted value never changes an existing ACL.
+    pub fn for_creation(mut self) -> Self {
+        if self.kind == "secure-enclave" && self.mode == Mode::Prompt && self.verify.is_none() {
+            self.verify = Some("biometry-any".into());
+        }
+        self
+    }
+
+    pub fn matches_existing(&self, old: &Self) -> bool {
+        let mut requested = self.clone();
+        let mut pinned = old.clone();
+        if pinned.kind == "secure-enclave" && pinned.mode == Mode::Prompt {
+            pinned
+                .verify
+                .get_or_insert_with(|| "biometry-current-set".into());
+            if requested.verify.is_none() {
+                requested.verify = pinned.verify.clone();
+            }
+        }
+        requested == pinned
+    }
+
     pub fn ensure_available(&self) -> Result<()> {
         let c = catalog()
             .into_iter()
