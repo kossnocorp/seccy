@@ -161,7 +161,7 @@ git push --tags
 '''
 
 [tasks."release/cli:rollback"]
-description = "Remove a CLI version's local tag, origin tag, and GitHub release if present"
+description = "Remove a CLI release, its tags, and its version-bump commit from local history"
 usage = '''
 arg "<version>" help="Release version (X.Y.Z)" validate="value matches '^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)$'" validate_error="Expected a version in X.Y.Z format (no leading zeros)"
 '''
@@ -169,6 +169,28 @@ run = '''
 #!/usr/bin/env bash
 set -euo pipefail
 tag="cli@$usage_version"
+# Search history even when an earlier rollback already removed the tag.
+bumps=$(git log --first-parent --format='%H %s' | awk -v subject="Bump $tag" '
+  substr($0, index($0, " ") + 1) == subject { print $1 }
+')
+if [[ $(printf '%s\n' "$bumps" | awk 'NF { n++ } END { print n+0 }') -gt 1 ]]; then
+  echo "Multiple commits named Bump $tag; refusing an ambiguous rollback." >&2
+  exit 1
+fi
+if [[ -n "$bumps" ]]; then
+  git symbolic-ref --quiet HEAD >/dev/null
+  parents=$(git rev-list --parents -n 1 "$bumps")
+  if [[ $(printf '%s\n' "$parents" | awk '{print NF}') != 2 ]]; then
+    echo "Version-bump commit must have exactly one parent." >&2
+    exit 1
+  fi
+  for state in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+    if [[ -e $(git rev-parse --git-path "$state") ]]; then
+      echo "Finish the current Git operation before rolling back." >&2
+      exit 1
+    fi
+  done
+fi
 if git show-ref --verify --quiet "refs/tags/$tag"; then
   git tag --delete "$tag"
 fi
@@ -181,6 +203,11 @@ if release=$(gh api "repos/kossnocorp/seccy/releases/tags/$tag" 2>&1); then
 elif [[ "$release" != *"(HTTP 404)"* ]]; then
   printf '%s\n' "$release" >&2
   exit 1
+fi
+if [[ -n "$bumps" ]]; then
+  # Replay later commits while dropping only the release task's bump commit.
+  # Git restores tracked local edits through autostash and stops on conflicts.
+  git rebase --rebase-merges --autostash --empty=keep --onto "$bumps^" "$bumps"
 fi
 '''
 
