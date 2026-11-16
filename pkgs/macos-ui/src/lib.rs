@@ -4,10 +4,17 @@ use serde::Serialize;
 #[derive(Clone, Debug, Serialize)]
 pub struct Request {
     pub details: String,
+    pub content: seccy_copy::Content,
+    #[serde(rename = "pidLabel")]
+    pub pid_label: String,
     pub key: String,
     pub fingerprint: String,
     pub executable: String,
     pub pid: i32,
+}
+
+pub fn pid_label(pid: i32) -> String {
+    seccy_copy::text("ui-pid", &[("pid", &pid.to_string())])
 }
 
 #[cfg(target_os = "macos")]
@@ -119,6 +126,8 @@ mod native {
             let details = "Approve the git commit?\n\nThe process chain Terminal → git commit wants to use the work key to sign a Git commit.";
             let authorization = authenticate(&Request {
                 details: details.into(),
+                content: seccy_copy::Content::default(),
+                pid_label: crate::pid_label(123),
                 key: "work".into(),
                 fingerprint: "sample".into(),
                 executable: "/usr/bin/git".into(),

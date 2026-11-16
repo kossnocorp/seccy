@@ -170,3 +170,19 @@ input). Appearance, truncation, placement, and the presentation of actions remai
 system controlled. Notifications cannot render our arbitrary SwiftUI layout or
 Markdown. A custom action could open our own details window for longer copy.
 Critical alerts require Apple's special entitlement and user permission.
+
+## Shared copy
+
+Experimental prompt and notification wording lives in
+[`../copy/locales/en-US/seccy.ftl`](../copy/locales/en-US/seccy.ftl), formatted by
+Rust's Fluent implementation. The legacy builtin prompt copy remains unchanged.
+The gallery's labels, requests, and notification examples are generated from the
+same catalog and presenter. Xcode and Cargo builds regenerate the copy; for
+standalone Swift tests or Canvas after editing the catalog, run:
+
+```sh
+cargo run -p seccy_copy --example generate-swift
+```
+
+See [`../copy/README.md`](../copy/README.md) for the shared-copy boundary. English
+is the only locale currently bundled.

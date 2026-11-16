@@ -16,7 +16,7 @@ final class RequestTests: XCTestCase {
     func testSecurityWarningsSurvivePresentation() {
         XCTAssertTrue(AuthorizationRequest.revoked.body.contains("[REVOKED]"))
         XCTAssertEqual(AuthorizationRequest.revoked.title, "Approve the git push?")
-        XCTAssertTrue(AuthorizationRequest.secrets.body.contains("named secrets"))
+        XCTAssertTrue(AuthorizationRequest.secrets.body.contains("to decrypt secrets GITHUB_TOKEN, DATABASE_URL"))
     }
 }
 
@@ -137,5 +137,33 @@ final class FingerprintHostTests: XCTestCase {
             XCTAssertEqual(host.intrinsicContentSize, NSSize(width: 64, height: 64))
         }
         context.invalidate()
+    }
+}
+
+final class SharedCopyTests: XCTestCase {
+    func testEveryNativeAuthenticationStateHasCatalogCopy() {
+        for state in AuthorizationState.allCases {
+            XCTAssertFalse(state.label.isEmpty)
+            XCTAssertFalse(state.message.isEmpty)
+        }
+    }
+
+    func testProductionShapeDecodesWithoutGalleryNotificationOrLegacyDetails() throws {
+        let json = #"{"content":{"title":"Authorize?","body":"Literal **value**","warning":true},"key":"work","fingerprint":"sample","executable":"/usr/bin/git","pid":42,"pidLabel":"PID 42"}"#
+        let request = try JSONDecoder().decode(AuthorizationRequest.self, from: Data(json.utf8))
+        XCTAssertNil(request.notification)
+        XCTAssertEqual(request.title, "Authorize?")
+        XCTAssertEqual(request.body, "Literal **value**")
+        XCTAssertTrue(request.content.warning)
+    }
+
+    func testGalleryNotificationsUseCompletedActionCopyAndPreserveWarnings() throws {
+        let signing = try XCTUnwrap(AuthorizationRequest.signing.notification)
+        XCTAssertEqual(signing.title, "seccy: key used")
+        XCTAssertTrue(signing.body.contains("used the work key"))
+        XCTAssertFalse(signing.body.contains("wants to use"))
+        XCTAssertTrue(try XCTUnwrap(AuthorizationRequest.revoked.notification).body.contains("[REVOKED]"))
+        XCTAssertTrue(AuthorizationRequest.revoked.content.warning)
+        XCTAssertFalse(AuthorizationRequest.signing.content.warning)
     }
 }

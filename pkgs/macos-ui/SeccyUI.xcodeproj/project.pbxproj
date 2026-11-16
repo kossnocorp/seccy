@@ -10,6 +10,28 @@
 	<string>56</string>
 	<key>objects</key>
 	<dict>
+		<key>3C281938AD76A17861A28043</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>path</key>
+			<string>Sources/Copy.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+		</dict>
+		<key>5C5853067C4AE365C668005E</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXFileReference</string>
+			<key>path</key>
+			<string>Sources/Copy.generated.swift</string>
+			<key>sourceTree</key>
+			<string>&lt;group&gt;</string>
+			<key>lastKnownFileType</key>
+			<string>sourcecode.swift</string>
+		</dict>
 		<key>6D0DD39917464A1640DBB8DA</key>
 		<dict>
 			<key>isa</key>
@@ -87,6 +109,20 @@
 			<key>explicitFileType</key>
 			<string>archive.ar</string>
 		</dict>
+		<key>AEFBFD69C1FCD89A8A50F5A1</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>3C281938AD76A17861A28043</string>
+		</dict>
+		<key>447836DA5036F19037106A83</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>5C5853067C4AE365C668005E</string>
+		</dict>
 		<key>C0178913221462783A92DA1A</key>
 		<dict>
 			<key>isa</key>
@@ -123,6 +159,8 @@
 			<integer>2147483647</integer>
 			<key>files</key>
 			<array>
+				<string>AEFBFD69C1FCD89A8A50F5A1</string>
+				<string>447836DA5036F19037106A83</string>
 				<string>C0178913221462783A92DA1A</string>
 				<string>26BC8C0A16C2CB5C7D003D88</string>
 				<string>0C903B8F78151118103E05F9</string>
@@ -130,6 +168,31 @@
 			</array>
 			<key>runOnlyForDeploymentPostprocessing</key>
 			<integer>0</integer>
+		</dict>
+		<key>BBD629A90696CD5C275DD17E</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXShellScriptBuildPhase</string>
+			<key>buildActionMask</key>
+			<integer>2147483647</integer>
+			<key>files</key>
+			<array/>
+			<key>inputPaths</key>
+			<array/>
+			<key>outputPaths</key>
+			<array/>
+			<key>alwaysOutOfDate</key>
+			<integer>1</integer>
+			<key>runOnlyForDeploymentPostprocessing</key>
+			<integer>0</integer>
+			<key>shellPath</key>
+			<string>/bin/bash</string>
+			<key>shellScript</key>
+			<string>export PATH="$HOME/.cargo/bin:$PATH"
+cd "$SRCROOT/../.."
+cargo run --quiet -p seccy_copy --example generate-swift</string>
+			<key>name</key>
+			<string>Generate shared Fluent copy</string>
 		</dict>
 		<key>74C77C5E5E19E1815D673CD8</key>
 		<dict>
@@ -221,6 +284,7 @@
 			<string>116D0D08FAC723AA73894C77</string>
 			<key>buildPhases</key>
 			<array>
+				<string>BBD629A90696CD5C275DD17E</string>
 				<string>C6568CCADBE6D2DDA6CE6C48</string>
 			</array>
 			<key>buildRules</key>
@@ -238,6 +302,20 @@
 			<string>BUILT_PRODUCTS_DIR</string>
 			<key>explicitFileType</key>
 			<string>wrapper.application</string>
+		</dict>
+		<key>CE19075E207C42F64EBFF5D9</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>3C281938AD76A17861A28043</string>
+		</dict>
+		<key>92C61428CA17823EBFBEA50E</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXBuildFile</string>
+			<key>fileRef</key>
+			<string>5C5853067C4AE365C668005E</string>
 		</dict>
 		<key>24CB2F8EDB2FAD0FE815F8C1</key>
 		<dict>
@@ -282,6 +360,8 @@
 			<integer>2147483647</integer>
 			<key>files</key>
 			<array>
+				<string>CE19075E207C42F64EBFF5D9</string>
+				<string>92C61428CA17823EBFBEA50E</string>
 				<string>24CB2F8EDB2FAD0FE815F8C1</string>
 				<string>62AD6411BD6877686818B490</string>
 				<string>938987FF0B6273C72B6EFCF0</string>
@@ -290,6 +370,31 @@
 			</array>
 			<key>runOnlyForDeploymentPostprocessing</key>
 			<integer>0</integer>
+		</dict>
+		<key>81AEDCCD8FEAFBBA4598A447</key>
+		<dict>
+			<key>isa</key>
+			<string>PBXShellScriptBuildPhase</string>
+			<key>buildActionMask</key>
+			<integer>2147483647</integer>
+			<key>files</key>
+			<array/>
+			<key>inputPaths</key>
+			<array/>
+			<key>outputPaths</key>
+			<array/>
+			<key>alwaysOutOfDate</key>
+			<integer>1</integer>
+			<key>runOnlyForDeploymentPostprocessing</key>
+			<integer>0</integer>
+			<key>shellPath</key>
+			<string>/bin/bash</string>
+			<key>shellScript</key>
+			<string>export PATH="$HOME/.cargo/bin:$PATH"
+cd "$SRCROOT/../.."
+cargo run --quiet -p seccy_copy --example generate-swift</string>
+			<key>name</key>
+			<string>Generate shared Fluent copy</string>
 		</dict>
 		<key>6F48F6E4FDC2F3196AECB35F</key>
 		<dict>
@@ -423,6 +528,7 @@
 			<string>4D8186DF5A8AEA52F7C472E9</string>
 			<key>buildPhases</key>
 			<array>
+				<string>81AEDCCD8FEAFBBA4598A447</string>
 				<string>93386DC039D77E82BF3D047F</string>
 				<string>6F48F6E4FDC2F3196AECB35F</string>
 			</array>
@@ -451,6 +557,8 @@
 			<string>PBXGroup</string>
 			<key>children</key>
 			<array>
+				<string>3C281938AD76A17861A28043</string>
+				<string>5C5853067C4AE365C668005E</string>
 				<string>6D0DD39917464A1640DBB8DA</string>
 				<string>71BA73218F9E9567BC0246B9</string>
 				<string>95C3C295CB1ACD313A0DA5E3</string>

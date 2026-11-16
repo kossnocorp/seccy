@@ -33,6 +33,16 @@ impl Caller {
     }
 
     pub fn summary(&self) -> String {
+        let (chain, directory) = self.presentation_context();
+        let mut text = format!("The process chain {chain}");
+        if let Some(directory) = directory {
+            text.push_str(&format!(" running at {directory}"));
+        }
+        text
+    }
+
+    // Data shared with the Fluent presenter; legacy wording stays above.
+    pub(crate) fn presentation_context(&self) -> (String, Option<String>) {
         let processes = || self.process.iter().chain(&self.ancestors);
         let chain: Vec<_> = processes().collect();
         let mut labels = Vec::new();
@@ -59,20 +69,18 @@ impl Caller {
         if self.process.is_none() {
             labels.push(value(basename(&self.executable)));
         }
-        let mut text = format!("The process chain {}", labels.join(" → "));
-        if let Some(repo) = processes().find_map(|p| p.details.repository_candidate.as_ref()) {
-            text.push_str(&format!(" running at {}", directory(repo)));
-        } else if let Some(cwd) = self
-            .process
-            .as_ref()
-            .and_then(|p| p.details.working_directory.as_ref())
-        {
-            text.push_str(&format!(" running at {}", directory(cwd)));
-        }
-        text
+        let location = processes()
+            .find_map(|p| p.details.repository_candidate.as_ref())
+            .or_else(|| {
+                self.process
+                    .as_ref()
+                    .and_then(|p| p.details.working_directory.as_ref())
+            })
+            .map(|path| directory(path));
+        (labels.join(" → "), location)
     }
 
-    fn git_operation(&self, allowed: &[&str]) -> Option<String> {
+    pub(crate) fn git_operation(&self, allowed: &[&str]) -> Option<String> {
         self.process.iter().chain(&self.ancestors).find_map(|p| {
             let command = p.details.command.as_ref()?;
             let subcommand = command.subcommand.as_deref()?;
