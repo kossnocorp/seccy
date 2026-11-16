@@ -11,6 +11,20 @@ pub struct Request {
     pub fingerprint: String,
     pub executable: String,
     pub pid: i32,
+    pub processes: Vec<Process>,
+}
+
+/// Presentation-only snapshots, requester first, then nearest parent first.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Process {
+    pub pid: i32,
+    pub pid_label: String,
+    pub name: String,
+    pub executable: Option<String>,
+    pub start_seconds: u64,
+    pub start_microseconds: u64,
+    pub bundle_paths: Vec<String>,
 }
 
 pub fn pid_label(pid: i32) -> String {
@@ -132,6 +146,7 @@ mod native {
                 fingerprint: "sample".into(),
                 executable: "/usr/bin/git".into(),
                 pid: 123,
+                processes: vec![],
             })
             .unwrap();
             unsafe {

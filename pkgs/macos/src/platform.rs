@@ -358,6 +358,25 @@ fn authentication_context(
         fingerprint: fingerprint.into(),
         executable: caller.executable.clone(),
         pid: caller.pid,
+        processes: caller
+            .process
+            .iter()
+            .chain(caller.ancestors.iter())
+            .map(|process| seccy_macos_ui::Process {
+                pid: process.pid,
+                pid_label: seccy_macos_ui::pid_label(process.pid),
+                name: process.name.clone(),
+                executable: process.executable.clone(),
+                start_seconds: process.start_time_unix_seconds,
+                start_microseconds: process.start_time_microseconds,
+                bundle_paths: process
+                    .details
+                    .applications
+                    .iter()
+                    .map(|app| app.bundle_path.clone())
+                    .collect(),
+            })
+            .collect(),
     })
     .map(Some)
 }
