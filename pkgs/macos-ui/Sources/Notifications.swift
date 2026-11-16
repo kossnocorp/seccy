@@ -8,10 +8,10 @@ enum NotificationFailure: Int32, Error {
     case unavailableBundle = 1, denied = 2, system = 3, timedOut = 4
     var message: String {
         switch self {
-        case .unavailableBundle: return "Native notifications require the Seccy.app bundle. Run the signed bundled executable."
-        case .denied: return "Notifications are disabled. Enable notifications for this app in System Settings → Notifications."
-        case .system: return "macOS could not authorize or submit the notification."
-        case .timedOut: return "Notification permission or submission timed out."
+        case .unavailableBundle: return Copy.text("notification-error-bundle")
+        case .denied: return Copy.text("notification-error-denied")
+        case .system: return Copy.text("notification-error-system")
+        case .timedOut: return Copy.text("notification-error-timeout")
         }
     }
 }

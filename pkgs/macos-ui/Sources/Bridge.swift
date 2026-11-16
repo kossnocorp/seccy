@@ -32,7 +32,7 @@ struct AuthorizationSession {
 // title bar, style, sizing, and content. Preview controls live in a separate window.
 func makeAuthorizationWindow<Content: View>(_ content: Content) -> NSWindow {
     let window = NSWindow(contentViewController: NSHostingController(rootView: content))
-    window.title = "Seccy · Authorize request"
+    window.title = Copy.text("ui-window-title")
     window.styleMask = [.titled, .closable]
     window.isReleasedWhenClosed = false
     window.center()

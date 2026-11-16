@@ -3,14 +3,16 @@ import LocalAuthentication
 import LocalAuthenticationEmbeddedUI
 
 struct AuthorizationRequest: Codable {
-    let details: String
+    let content: AuthorizationContent
+    let notification: NotificationContent?
+    let pidLabel: String
     let key: String
     let fingerprint: String
     let executable: String
     let pid: Int32
 
-    var title: String { details.components(separatedBy: "\n").first ?? "Authorize key use?" }
-    var body: String { details.components(separatedBy: "\n").dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) }
+    var title: String { content.title }
+    var body: String { content.body }
 
     // Literal Text, not Markdown: process names and remote values are untrusted.
     static func display(_ value: String) -> String {
@@ -24,8 +26,8 @@ struct AuthorizationRequest: Codable {
 }
 
 enum AuthorizationState: String, CaseIterable, Identifiable {
-    case ready = "Ready", authenticating = "Touch ID", success = "Approved"
-    case failure = "Failed", unavailable = "Unavailable", cancelled = "Cancelled", warning = "Host warning"
+    case ready, authenticating, success, failure, unavailable, cancelled, warning
+    var label: String { Copy.text("ui-state-" + rawValue) }
     var id: String { rawValue }
     var symbol: String {
         switch self {
@@ -42,17 +44,7 @@ enum AuthorizationState: String, CaseIterable, Identifiable {
         default: return .accentColor
         }
     }
-    var message: String {
-        switch self {
-        case .ready: return "Use Touch ID to approve this request."
-        case .authenticating: return "Place your finger on Touch ID."
-        case .success: return "Identity verified."
-        case .failure: return "Authentication failed. Try again or cancel."
-        case .unavailable: return "Touch ID is unavailable. No access was granted."
-        case .cancelled: return "Request cancelled. No access was granted."
-        case .warning: return "Review the server key warning before approving."
-        }
-    }
+    var message: String { Copy.text("ui-status-" + rawValue) }
 }
 
 // Keep SwiftUI's sizing passes outside the animated native control. The host
@@ -121,7 +113,7 @@ struct AuthorizationView: View {
     var retry: () -> Void = {}
     var cancel: () -> Void = {}
 
-    private var warning: Bool { request.body.contains("[REVOKED]") || request.body.contains("No matching key") || request.body.contains("No server host key") }
+    private var warning: Bool { request.content.warning }
 
     var body: some View {
         let _ = UITrace.event("prompt.body", ["state": state.rawValue, "context": UITrace.id(context)])
@@ -134,30 +126,30 @@ struct AuthorizationView: View {
                     }
                     .onDisappear { UITrace.event("fingerprint.disappear", ["context": UITrace.id(context)]) }
                     .id(ObjectIdentifier(context))
-                    .accessibilityLabel("Touch ID authentication")
+                    .accessibilityLabel(Copy.text("ui-touch-id-accessibility"))
             } else {
                 Image(systemName: state.symbol).font(.system(size: 52)).foregroundStyle(state.color)
-                    .frame(height: 64).accessibilityLabel(state.rawValue)
+                    .frame(height: 64).accessibilityLabel(state.label)
             }
             Text(AuthorizationRequest.display(request.title))
                 .font(.title2.bold()).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     // Separate semantic emphasis from literal values; no parsing of caller Markdown.
-                    (Text("Key ").foregroundColor(.secondary) + Text(AuthorizationRequest.display(request.key)).bold())
+                    (Text(Copy.text("ui-key") + " ").foregroundColor(.secondary) + Text(AuthorizationRequest.display(request.key)).bold())
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("REQUESTING PROCESS").font(.caption.bold()).foregroundStyle(.secondary)
+                        Text(Copy.text("ui-process")).font(.caption.bold()).foregroundStyle(.secondary)
                         Text(AuthorizationRequest.display(request.executable)).font(.system(.body, design: .monospaced).bold())
-                        Text("PID \(request.pid)").font(.caption).foregroundStyle(.secondary)
+                        Text(request.pidLabel).font(.caption).foregroundStyle(.secondary)
                     }
                     Text(request.body).fixedSize(horizontal: false, vertical: true)
                     if warning {
-                        Label("Server identity needs attention", systemImage: "exclamationmark.triangle.fill")
+                        Label(Copy.text("ui-host-warning"), systemImage: "exclamationmark.triangle.fill")
                             .font(.headline).foregroundStyle(.orange)
                     }
                     Divider()
                     Text(AuthorizationRequest.display(request.fingerprint)).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
-                    Text("Approval applies to this request only.").font(.callout.bold())
+                    Text(Copy.text("ui-request-only")).font(.callout.bold())
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
@@ -168,10 +160,10 @@ struct AuthorizationView: View {
             Text(state.message).font(.callout.weight(.medium)).foregroundStyle(state.color)
                 .multilineTextAlignment(.center).accessibilityAddTraits(.updatesFrequently)
             HStack {
-                Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
+                Button(Copy.text("ui-cancel"), action: cancel).keyboardShortcut(.cancelAction)
                 Spacer()
                 if state == .failure || state == .unavailable || state == .ready || state == .warning {
-                    Button("Use Touch ID", action: retry).keyboardShortcut(.defaultAction)
+                    Button(Copy.text("ui-touch-id"), action: retry).keyboardShortcut(.defaultAction)
                 }
             }
         }
@@ -182,10 +174,10 @@ struct AuthorizationView: View {
 }
 
 extension AuthorizationRequest {
-    static let signing = AuthorizationRequest(details: "Approve the git commit?\n\nThe process chain Terminal → zsh → git commit wants to use the work key to sign a Git commit.", key: "work", fingerprint: "SHA256:KvdQ3vU2Tji0YtGYnGQeG79n6Cj4n94JUu6cN0aR1wk", executable: "/usr/bin/git", pid: 4217)
-    static let secrets = AuthorizationRequest(details: "Decrypt secrets GITHUB_TOKEN, DATABASE_URL?\n\nThe process chain Terminal → fnox wants to decrypt the named secrets using the work key.", key: "work", fingerprint: signing.fingerprint, executable: "/opt/homebrew/bin/fnox", pid: 4218)
-    static let revoked = AuthorizationRequest(details: "Approve the git push?\n\nThe process chain Terminal → git push → ssh wants to use the work key to access git@example.com.\n\n[REVOKED] Server key matches a revoked known_hosts entry", key: "work", fingerprint: signing.fingerprint, executable: "/usr/bin/ssh", pid: 4219)
-    static let long = AuthorizationRequest(details: "Approve this signing request?\n\n" + String(repeating: "Terminal → very-long-process-name → ", count: 24) + "wants to sign data whose purpose could not be identified.", key: "work_🔐_e\u{301}", fingerprint: signing.fingerprint, executable: "/tmp/untrusted/**not bold**/\u{202e}process", pid: 4220)
+    static let signing = Copy.fixture("signing")
+    static let secrets = Copy.fixture("secrets")
+    static let revoked = Copy.fixture("revoked")
+    static let long = Copy.fixture("long")
 }
 
 // A separate context for a hardware demo; it is never returned to Rust or used
@@ -231,7 +223,7 @@ final class GalleryAuthentication: ObservableObject {
             self.state = .authenticating
             UITrace.event("auth.evaluate", ["context": UITrace.id(self.context), "attempt": current.uuidString])
             self.context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
-                                        localizedReason: "Preview Seccy's Touch ID animation. No keys will be accessed.") { [weak self] success, error in
+                                        localizedReason: Copy.text("gallery-auth-reason")) { [weak self] success, error in
                 let failure = error as NSError?
                 UITrace.event("auth.reply", ["attempt": current.uuidString, "success": String(success), "domain": failure?.domain ?? "", "code": String(failure?.code ?? 0)])
                 DispatchQueue.main.async {
@@ -263,10 +255,10 @@ final class GalleryModel: NSObject, ObservableObject, NSWindowDelegate {
     @Published var state: AuthorizationState = .authenticating {
         didSet { UITrace.event("controls.state", ["value": state.rawValue]) }
     }
-    @Published var scenario = "Git signing" {
+    @Published var scenario = "signing" {
         didSet { UITrace.event("controls.scenario", ["value": scenario]) }
     }
-    @Published var appearance = "System" { didSet { UITrace.event("controls.appearance", ["value": appearance]); applyAppearance() } }
+    @Published var appearance = "system" { didSet { UITrace.event("controls.appearance", ["value": appearance]); applyAppearance() } }
     @Published var live = true { didSet { UITrace.event("controls.live", ["value": String(live)]); authentication.cancel() } }
     @Published var notificationStatus = ""
     let authentication = GalleryAuthentication()
@@ -274,9 +266,9 @@ final class GalleryModel: NSObject, ObservableObject, NSWindowDelegate {
 
     var request: AuthorizationRequest {
         switch scenario {
-        case "Secrets batch": return .secrets
-        case "Revoked host": return .revoked
-        case "Long / untrusted text": return .long
+        case "secrets": return .secrets
+        case "revoked": return .revoked
+        case "long": return .long
         default: return .signing
         }
     }
@@ -287,7 +279,7 @@ final class GalleryModel: NSObject, ObservableObject, NSWindowDelegate {
             let window = makeAuthorizationWindow(GalleryPrompt(model: self, authentication: authentication))
             window.delegate = self
             previewWindow = window
-            if let controls = NSApp.windows.first(where: { $0.title == "Seccy Preview Controls" }),
+            if let controls = NSApp.windows.first(where: { $0.title == Copy.text("gallery-title") }),
                let screen = controls.screen {
                 let visible = screen.visibleFrame
                 let total = controls.frame.width + window.frame.width + 16
@@ -327,21 +319,18 @@ final class GalleryModel: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     private func applyAppearance() {
-        previewWindow?.appearance = appearance == "System" ? nil : NSAppearance(named: appearance == "Dark" ? .darkAqua : .aqua)
+        previewWindow?.appearance = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
     }
 
     func notify() {
         UITrace.event("notification.submit")
-        let title = scenario == "Secrets batch" ? "seccy: secret decrypted" : "seccy: key used"
-        let message = scenario == "Secrets batch"
-            ? "Secret GITHUB_TOKEN decrypted.\n\nThe process chain Terminal → fnox used the work key to decrypt secret GITHUB_TOKEN."
-            : (scenario == "Revoked host" ? "SSH authentication request signed.\n\n" : "Data signed.\n\n") + request.body.replacingOccurrences(of: "wants to use", with: "used")
-        notificationStatus = "Submitting notification…"
-        let submission = NativeNotifications.shared.send(title: title, body: message) { [weak self] result in
+        guard let notification = request.notification else { return }
+        notificationStatus = Copy.text("gallery-notification-submitting")
+        let submission = NativeNotifications.shared.send(title: notification.title, body: notification.body) { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
                 case .success:
-                    self?.notificationStatus = "Submitted as Seccy UI Gallery. macOS notification settings and Focus control banner visibility."
+                    self?.notificationStatus = Copy.text("gallery-notification-submitted")
                 case .failure(let error): self?.notificationStatus = error.message
                 }
             }
@@ -368,30 +357,30 @@ struct GalleryView: View {
     var body: some View {
         let _ = UITrace.event("controls.body")
         VStack(alignment: .leading, spacing: 18) {
-            Text("Seccy Preview Controls").font(.title2.bold())
-            Text("The separate prompt uses the production window and layout. All requests here are samples; no keys are accessed.")
+            Text(Copy.text("gallery-title")).font(.title2.bold())
+            Text(Copy.text("gallery-description"))
                 .font(.callout).foregroundStyle(.secondary)
-            Picker("Request", selection: $model.scenario) {
-                ForEach(["Git signing", "Secrets batch", "Revoked host", "Long / untrusted text"], id: \.self) { Text($0) }
+            Picker(Copy.text("gallery-request"), selection: $model.scenario) {
+                ForEach(["signing", "secrets", "revoked", "long"], id: \.self) { Text(Copy.text("gallery-scenario-" + $0)).tag($0) }
             }
-            Toggle("Live Touch ID", isOn: $model.live)
+            Toggle(Copy.text("gallery-live"), isOn: $model.live)
             if !model.live {
-                Picker("State", selection: $model.state) {
-                    ForEach(AuthorizationState.allCases) { Text($0.rawValue).tag($0) }
+                Picker(Copy.text("gallery-state"), selection: $model.state) {
+                    ForEach(AuthorizationState.allCases) { Text($0.label).tag($0) }
                 }
             }
-            Picker("Prompt appearance", selection: $model.appearance) {
-                ForEach(["System", "Light", "Dark"], id: \.self) { Text($0) }
+            Picker(Copy.text("gallery-appearance"), selection: $model.appearance) {
+                ForEach(["system", "light", "dark"], id: \.self) { Text(Copy.text("gallery-appearance-" + $0)).tag($0) }
             }
             HStack {
-                Button("Show prompt") { model.show() }
-                Button("Start Touch ID demo") { model.start() }.disabled(!model.live)
+                Button(Copy.text("gallery-show")) { model.show() }
+                Button(Copy.text("gallery-start")) { model.start() }.disabled(!model.live)
             }
             Divider()
-            Text("Notifications").font(.headline)
-            Text("Uses native macOS notifications with the Seccy icon. macOS may ask for notification permission for the gallery.")
+            Text(Copy.text("gallery-notifications")).font(.headline)
+            Text(Copy.text("gallery-notification-description"))
                 .font(.caption).foregroundStyle(.secondary)
-            Button("Send test notification") { model.notify() }
+            Button(Copy.text("gallery-notification-send")) { model.notify() }
             Text(model.notificationStatus).font(.caption).foregroundStyle(.secondary)
         }
         .padding(24).frame(width: 360)

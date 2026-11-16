@@ -2,6 +2,7 @@
 pub mod agent;
 pub mod envelope;
 pub mod payload;
+pub mod presentation;
 pub mod process;
 mod prompt;
 pub mod state;

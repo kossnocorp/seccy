@@ -6,6 +6,8 @@ fn main() {
         return;
     }
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let copy_source = out.join("Copy.generated.swift");
+    std::fs::write(&copy_source, seccy_copy::swift_source()).expect("generate Fluent copy");
     let arch = match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
         "aarch64" => "arm64",
         "x86_64" => "x86_64",
@@ -32,6 +34,7 @@ fn main() {
             sdk.trim(),
             "-target",
             &format!("{arch}-apple-macosx12.0"),
+            "Sources/Copy.swift",
             "Sources/Notifications.swift",
             "Sources/UITrace.swift",
             "Sources/AuthorizationView.swift",
@@ -39,6 +42,7 @@ fn main() {
             "-o",
         ])
         .arg(out.join("libSeccyUI.a"))
+        .arg(&copy_source)
         .status()
         .expect("run Swift compiler");
     assert!(status.success(), "SwiftUI compilation failed");

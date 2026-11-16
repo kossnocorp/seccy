@@ -18,20 +18,25 @@ def add(identifier, isa, **fields):
     return key
 
 files = {}
-for path in ["Sources/Notifications.swift", "Sources/UITrace.swift", "Sources/AuthorizationView.swift", "Sources/Bridge.swift", "Gallery/GalleryApp.swift"]:
+for path in ["Sources/Copy.swift", "Sources/Copy.generated.swift", "Sources/Notifications.swift", "Sources/UITrace.swift", "Sources/AuthorizationView.swift", "Sources/Bridge.swift", "Gallery/GalleryApp.swift"]:
     files[path] = add(path, "PBXFileReference", path=path, sourceTree="<group>", lastKnownFileType="sourcecode.swift")
 files["Gallery/Info.plist"] = add("Gallery/Info.plist", "PBXFileReference", path="Gallery/Info.plist", sourceTree="<group>", lastKnownFileType="text.plist.xml")
 products = []
 targets = []
 for name, kind, paths, product_path, product_type in [
-    ("SeccyUI", "com.apple.product-type.library.static", ["Sources/Notifications.swift", "Sources/UITrace.swift", "Sources/AuthorizationView.swift", "Sources/Bridge.swift"], "libSeccyUI.a", "archive.ar"),
-    ("Gallery", "com.apple.product-type.application", ["Sources/Notifications.swift", "Sources/UITrace.swift", "Sources/AuthorizationView.swift", "Sources/Bridge.swift", "Gallery/GalleryApp.swift"], "Seccy UI Gallery.app", "wrapper.application"),
+    ("SeccyUI", "com.apple.product-type.library.static", ["Sources/Copy.swift", "Sources/Copy.generated.swift", "Sources/Notifications.swift", "Sources/UITrace.swift", "Sources/AuthorizationView.swift", "Sources/Bridge.swift"], "libSeccyUI.a", "archive.ar"),
+    ("Gallery", "com.apple.product-type.application", ["Sources/Copy.swift", "Sources/Copy.generated.swift", "Sources/Notifications.swift", "Sources/UITrace.swift", "Sources/AuthorizationView.swift", "Sources/Bridge.swift", "Gallery/GalleryApp.swift"], "Seccy UI Gallery.app", "wrapper.application"),
 ]:
     product = add(name + " product", "PBXFileReference", path=product_path, sourceTree="BUILT_PRODUCTS_DIR", explicitFileType=product_type)
     products.append(product)
     builds = [add(name + path, "PBXBuildFile", fileRef=files[path]) for path in paths]
     phase = add(name + " sources", "PBXSourcesBuildPhase", buildActionMask=2147483647, files=builds, runOnlyForDeploymentPostprocessing=0)
-    phases = [phase]
+    copy_phase = add(name + " copy", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
+        files=[], inputPaths=[], outputPaths=[], alwaysOutOfDate=1,
+        runOnlyForDeploymentPostprocessing=0, shellPath="/bin/bash",
+        shellScript='export PATH="$HOME/.cargo/bin:$PATH"\ncd "$SRCROOT/../.."\ncargo run --quiet -p seccy_copy --example generate-swift',
+        name="Generate shared Fluent copy")
+    phases = [copy_phase, phase]
     if name == "Gallery":
         phases.append(add("Gallery icon", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
             files=[], inputPaths=["$(SRCROOT)/../../assets/icon-macos.png", "$(SRCROOT)/../macos/scripts/build-icon.sh"],

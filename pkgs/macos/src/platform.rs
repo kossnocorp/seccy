@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use core_foundation::base::{CFType, TCFType};
+use seccy_core::presentation::{Activity, Operation};
 use seccy_core::{Caller, Identity, KeyStore, Mode, ProcessInfo};
 use seccy_macos_ui::{Authorization, Request};
 use security_framework::{
@@ -193,6 +194,16 @@ impl SecureEnclave {
                 .collect::<Vec<_>>()
                 .join("\n"),
             caller,
+            &caller.activity(
+                &items
+                    .iter()
+                    .map(|(key, _, _)| key.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Operation::Secrets {
+                    names: items.iter().map(|(_, _, name)| (*name).into()).collect(),
+                },
+            ),
         )?;
         let mut plaintexts = Vec::new();
         for ((expected, _, _), ciphertext) in items.iter().zip(ciphertexts) {
@@ -231,12 +242,19 @@ impl SecureEnclave {
         } else {
             expected.decrypt_description("ECIES P-256/SHA-256/AES-GCM", caller)
         };
+        let activity = caller.activity(
+            &expected.name,
+            Operation::Secret {
+                name: name.map(str::to_owned),
+            },
+        );
         let context = authentication_context(
             expected.mode,
             &details,
             &expected.name,
             &expected.fingerprint,
             caller,
+            &activity,
         )?;
         let key = lookup_with_context(&expected.storage_id, expected.mode, as_cf_context(&context))?
             .context("key no longer exists")?;
@@ -254,7 +272,8 @@ impl SecureEnclave {
             "decrypted secret exceeds 64 KiB"
         );
         if expected.mode == Mode::Notify {
-            notify("seccy: secret decrypted", &details)?;
+            let notification = activity.notification();
+            notify(&notification.title, &notification.body)?;
             tracing::info!(event = "notification_submitted");
         }
         tracing::info!(event = "secret_decrypted", key = %expected.name);
@@ -328,12 +347,15 @@ fn authentication_context(
     key: &str,
     fingerprint: &str,
     caller: &Caller,
+    activity: &Activity,
 ) -> Result<Option<Authorization>> {
     if mode != Mode::Prompt {
         return Ok(None);
     }
     seccy_macos_ui::authenticate(&Request {
         details: details.into(),
+        content: activity.content(false),
+        pid_label: seccy_macos_ui::pid_label(caller.pid),
         key: key.into(),
         fingerprint: fingerprint.into(),
         executable: caller.executable.clone(),
@@ -426,12 +448,14 @@ impl KeyStore for SecureEnclave {
         let details = expected.sign_description(message.len(), caller, payload);
         // Fresh context for every signature, attached to the actual key operation.
         // Keychain ACLs still enforce the creation-time verification policy; this only customizes UI.
+        let activity = caller.signing_activity(&expected.name, payload);
         let context = authentication_context(
             expected.mode,
             &details,
             &expected.name,
             &expected.fingerprint,
             caller,
+            &activity,
         )?;
         let cf_context = as_cf_context(&context);
         let key = lookup_with_context(&expected.storage_id, expected.mode, cf_context)?
@@ -444,7 +468,8 @@ impl KeyStore for SecureEnclave {
             .create_signature(Algorithm::ECDSASignatureMessageX962SHA256, message)
             .map_err(|e| private_operation_error(expected, "signing", &e))?;
         if expected.mode == Mode::Notify {
-            notify("seccy: key used", &details)?;
+            let notification = activity.notification();
+            notify(&notification.title, &notification.body)?;
             tracing::info!(event = "notification_submitted");
         }
         Ok(signature)

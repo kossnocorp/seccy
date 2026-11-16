@@ -12,7 +12,7 @@ struct SeccyGalleryApp: App {
         }
     }
     var body: some Scene {
-        WindowGroup("Seccy Preview Controls") { GalleryView() }
+        WindowGroup(Copy.text("gallery-title")) { GalleryView() }
     }
 }
 
