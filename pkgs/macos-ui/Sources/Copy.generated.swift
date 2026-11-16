@@ -16,7 +16,38 @@ let sharedCopyJSON = #"""
         "title": "seccy: key used"
       },
       "pid": 4220,
-      "pidLabel": "PID 4220"
+      "pidLabel": "PID 4220",
+      "processes": [
+        {
+          "bundlePaths": [],
+          "executable": "/tmp/untrusted/**not bold**/‮process",
+          "name": "‮process",
+          "pid": 4220,
+          "pidLabel": "PID 4220",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        },
+        {
+          "bundlePaths": [],
+          "executable": "/bin/zsh",
+          "name": "zsh",
+          "pid": 4100,
+          "pidLabel": "PID 4100",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        },
+        {
+          "bundlePaths": [
+            "/System/Applications/Utilities/Terminal.app"
+          ],
+          "executable": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+          "name": "Terminal",
+          "pid": 4000,
+          "pidLabel": "PID 4000",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        }
+      ]
     },
     "revoked": {
       "content": {
@@ -32,7 +63,38 @@ let sharedCopyJSON = #"""
         "title": "seccy: key used"
       },
       "pid": 4219,
-      "pidLabel": "PID 4219"
+      "pidLabel": "PID 4219",
+      "processes": [
+        {
+          "bundlePaths": [],
+          "executable": "/usr/bin/ssh",
+          "name": "ssh",
+          "pid": 4219,
+          "pidLabel": "PID 4219",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        },
+        {
+          "bundlePaths": [],
+          "executable": "/bin/zsh",
+          "name": "zsh",
+          "pid": 4100,
+          "pidLabel": "PID 4100",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        },
+        {
+          "bundlePaths": [
+            "/System/Applications/Utilities/Terminal.app"
+          ],
+          "executable": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+          "name": "Terminal",
+          "pid": 4000,
+          "pidLabel": "PID 4000",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        }
+      ]
     },
     "secrets": {
       "content": {
@@ -48,7 +110,38 @@ let sharedCopyJSON = #"""
         "title": "seccy: secret decrypted"
       },
       "pid": 4218,
-      "pidLabel": "PID 4218"
+      "pidLabel": "PID 4218",
+      "processes": [
+        {
+          "bundlePaths": [],
+          "executable": "/opt/homebrew/bin/fnox",
+          "name": "fnox",
+          "pid": 4218,
+          "pidLabel": "PID 4218",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        },
+        {
+          "bundlePaths": [],
+          "executable": "/bin/zsh",
+          "name": "zsh",
+          "pid": 4100,
+          "pidLabel": "PID 4100",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        },
+        {
+          "bundlePaths": [
+            "/System/Applications/Utilities/Terminal.app"
+          ],
+          "executable": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+          "name": "Terminal",
+          "pid": 4000,
+          "pidLabel": "PID 4000",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        }
+      ]
     },
     "signing": {
       "content": {
@@ -64,7 +157,38 @@ let sharedCopyJSON = #"""
         "title": "seccy: key used"
       },
       "pid": 4217,
-      "pidLabel": "PID 4217"
+      "pidLabel": "PID 4217",
+      "processes": [
+        {
+          "bundlePaths": [],
+          "executable": "/usr/bin/git",
+          "name": "git",
+          "pid": 4217,
+          "pidLabel": "PID 4217",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        },
+        {
+          "bundlePaths": [],
+          "executable": "/bin/zsh",
+          "name": "zsh",
+          "pid": 4100,
+          "pidLabel": "PID 4100",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        },
+        {
+          "bundlePaths": [
+            "/System/Applications/Utilities/Terminal.app"
+          ],
+          "executable": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+          "name": "Terminal",
+          "pid": 4000,
+          "pidLabel": "PID 4000",
+          "startMicroseconds": 0,
+          "startSeconds": 0
+        }
+      ]
     }
   },
   "labels": {
@@ -97,6 +221,7 @@ let sharedCopyJSON = #"""
     "ui-host-warning": "Server identity needs attention",
     "ui-key": "Key",
     "ui-process": "REQUESTING PROCESS",
+    "ui-process-chain": "Process chain",
     "ui-request-only": "Approval applies to this request only.",
     "ui-state-authenticating": "Touch ID",
     "ui-state-cancelled": "Cancelled",

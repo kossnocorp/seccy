@@ -67,6 +67,7 @@ fn main() {
         "CoreServices",
         "UserNotifications",
         "AppKit",
+        "UniformTypeIdentifiers",
         "SwiftUI",
         "LocalAuthentication",
         "LocalAuthenticationEmbeddedUI",

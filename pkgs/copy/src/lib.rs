@@ -314,6 +314,29 @@ pub fn swift_source() -> String {
                 "content": activity.content(false), "notification": activity.notification(),
                 "key": key, "executable": executable, "pid": pid,
                 "pidLabel": text("ui-pid", &[("pid", &pid.to_string())]),
+                "processes": [
+                    {
+                        "pid": pid,
+                        "pidLabel": text("ui-pid", &[("pid", &pid.to_string())]),
+                        "name": executable.rsplit('/').next().unwrap_or(executable),
+                        "executable": executable,
+                        "startSeconds": 0, "startMicroseconds": 0, "bundlePaths": []
+                    },
+                    {
+                        "pid": 4100,
+                        "pidLabel": text("ui-pid", &[("pid", "4100")]),
+                        "name": "zsh", "executable": "/bin/zsh",
+                        "startSeconds": 0, "startMicroseconds": 0, "bundlePaths": []
+                    },
+                    {
+                        "pid": 4000,
+                        "pidLabel": text("ui-pid", &[("pid", "4000")]),
+                        "name": "Terminal",
+                        "executable": "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+                        "startSeconds": 0, "startMicroseconds": 0,
+                        "bundlePaths": ["/System/Applications/Utilities/Terminal.app"]
+                    }
+                ],
                 "fingerprint": "SHA256:KvdQ3vU2Tji0YtGYnGQeG79n6Cj4n94JUu6cN0aR1wk"
             }),
         );

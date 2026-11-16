@@ -1,4 +1,6 @@
 import SwiftUI
+import UniformTypeIdentifiers
+import Darwin
 import LocalAuthentication
 import LocalAuthenticationEmbeddedUI
 
@@ -10,6 +12,7 @@ struct AuthorizationRequest: Codable {
     let fingerprint: String
     let executable: String
     let pid: Int32
+    var processes: [ProcessPresentation]? = nil
 
     var title: String { content.title }
     var body: String { content.body }
@@ -22,6 +25,82 @@ struct AuthorizationRequest: Codable {
             }
             return String(scalar)
         }.joined().prefix(8192))
+    }
+}
+
+struct ProcessPresentation: Codable, Identifiable {
+    let pid: Int32
+    let pidLabel: String
+    let name: String
+    let executable: String?
+    let startSeconds: UInt64
+    let startMicroseconds: UInt64
+    let bundlePaths: [String]
+
+    var id: String { "\(pid):\(startSeconds):\(startMicroseconds)" }
+}
+
+enum ProcessIconResolver {
+    static var fallback: NSImage { NSWorkspace.shared.icon(for: .unixExecutable) }
+
+    // PID reuse must not attach another application's icon to this snapshot.
+    private static func matches(_ process: ProcessPresentation) -> Bool {
+        guard process.pid > 0, process.startSeconds > 0 else { return false }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(process.pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+              info.pbi_start_tvsec == process.startSeconds,
+              info.pbi_start_tvusec == process.startMicroseconds else { return false }
+        // PROC_PIDPATHINFO_MAXSIZE is a compound C macro Swift cannot import.
+        var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(process.pid, &path, UInt32(path.count)) > 0 else { return false }
+        return String(cString: path) == process.executable
+    }
+
+    static func resolve(_ process: ProcessPresentation) -> NSImage {
+        if matches(process),
+           let icon = NSRunningApplication(processIdentifier: process.pid)?.icon,
+           matches(process) {
+            return icon
+        }
+        for path in process.bundlePaths where FileManager.default.fileExists(atPath: path) {
+            return NSWorkspace.shared.icon(forFile: path)
+        }
+        return fileIcon(process.executable)
+    }
+
+    static func fileIcon(_ path: String?) -> NSImage {
+        guard let path = path, FileManager.default.fileExists(atPath: path) else { return fallback }
+        return NSWorkspace.shared.icon(forFile: path)
+    }
+}
+
+// Resolve once per request identity, rather than during SwiftUI body updates.
+private struct ProcessIdentityView: View {
+    let process: ProcessPresentation
+    var prominent = false
+    @State private var icon: NSImage?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(nsImage: icon ?? ProcessIconResolver.fallback)
+                .resizable().scaledToFit()
+                .frame(width: prominent ? 48 : 28, height: prominent ? 48 : 28)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(AuthorizationRequest.display(process.name))
+                    .font(prominent ? .headline : .body)
+                Text(process.pidLabel).font(.caption).foregroundStyle(.secondary)
+                if let path = process.executable {
+                    Text(AuthorizationRequest.display(path))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2).help(AuthorizationRequest.display(path))
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .task(id: process.id) { icon = ProcessIconResolver.resolve(process) }
     }
 }
 
@@ -114,6 +193,13 @@ struct AuthorizationView: View {
     var cancel: () -> Void = {}
 
     private var warning: Bool { request.content.warning }
+    private var requester: ProcessPresentation {
+        request.processes?.first(where: { $0.pid == request.pid }) ??
+            ProcessPresentation(pid: request.pid, pidLabel: request.pidLabel,
+                                name: URL(fileURLWithPath: request.executable).lastPathComponent,
+                                executable: request.executable, startSeconds: 0,
+                                startMicroseconds: 0, bundlePaths: [])
+    }
 
     var body: some View {
         let _ = UITrace.event("prompt.body", ["state": state.rawValue, "context": UITrace.id(context)])
@@ -139,8 +225,17 @@ struct AuthorizationView: View {
                     (Text(Copy.text("ui-key") + " ").foregroundColor(.secondary) + Text(AuthorizationRequest.display(request.key)).bold())
                     VStack(alignment: .leading, spacing: 4) {
                         Text(Copy.text("ui-process")).font(.caption.bold()).foregroundStyle(.secondary)
-                        Text(AuthorizationRequest.display(request.executable)).font(.system(.body, design: .monospaced).bold())
-                        Text(request.pidLabel).font(.caption).foregroundStyle(.secondary)
+                        ProcessIdentityView(process: requester, prominent: true)
+                    }
+                    if let processes = request.processes, processes.count > 1 {
+                        DisclosureGroup(Copy.text("ui-process-chain")) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(Array(processes.reversed())) { process in
+                                    ProcessIdentityView(process: process)
+                                }
+                            }
+                            .padding(.top, 10)
+                        }
                     }
                     Text(request.body).fixedSize(horizontal: false, vertical: true)
                     if warning {

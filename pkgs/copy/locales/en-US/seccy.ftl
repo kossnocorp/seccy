@@ -4,6 +4,7 @@
 ui-window-title = Seccy · Authorize request
 ui-key = Key
 ui-process = REQUESTING PROCESS
+ui-process-chain = Process chain
 ui-request-only = Approval applies to this request only.
 ui-host-warning = Server identity needs attention
 ui-cancel = Cancel
