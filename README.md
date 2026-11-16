@@ -182,6 +182,7 @@ email = "automation@example.com"
 ```sh
 seccy provision --json
 seccy list --json
+seccy list --retired --json  # include retained old generations
 seccy get personal --json
 seccy sync --json
 seccy agent --json

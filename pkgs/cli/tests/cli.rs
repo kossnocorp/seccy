@@ -588,3 +588,79 @@ fn rebuild_all_requires_confirmation_before_any_hardware_operation() {
         );
     }
 }
+
+#[test]
+fn list_hides_retired_generations_unless_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = seccy_core::storage::Paths::resolve(Some(dir.path()), |_| None).unwrap();
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&paths.state)
+        .unwrap();
+    let active = "seccy_list_active_fixture";
+    let old = "key_seccy_list_retired_fixture";
+    let mut state = seccy_core::state::State::default();
+    state
+        .overlay(
+            &seccy_core::Config::parse(&inventory_config(active)).unwrap(),
+            &dir.path().join("missing.toml"),
+        )
+        .unwrap();
+    let mut retired = state.keys[active].clone();
+    retired.retired = true;
+    retired.alias = Some(active.into());
+    retired.storage_id = Some(old.into());
+    state.keys.insert(old.into(), retired);
+    state.save(&paths).unwrap();
+    let before = std::fs::read(paths.state.join("state.toml")).unwrap();
+    for include_retired in [false, true] {
+        for json in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_seccy"));
+            command.arg("list");
+            if include_retired {
+                command.arg("--retired");
+            }
+            if json {
+                command.arg("--json");
+            }
+            let result = command
+                .current_dir(dir.path())
+                .env("HOME", dir.path())
+                .env("XDG_CONFIG_HOME", dir.path().join(".config"))
+                .env("XDG_STATE_HOME", dir.path().join(".local/state"))
+                .env("XDG_DATA_HOME", dir.path().join(".local/share"))
+                .output()
+                .unwrap();
+            let output = String::from_utf8(result.stdout).unwrap();
+            assert!(result.status.success(), "{output}");
+            assert!(output.contains(active));
+            assert_eq!(output.contains(old), include_retired);
+            if json {
+                let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+                assert_eq!(
+                    value["keys"].as_array().unwrap().len(),
+                    if include_retired { 2 } else { 1 }
+                );
+            }
+        }
+    }
+    let result = Command::new(env!("CARGO_BIN_EXE_seccy"))
+        .args(["get", old, "--json"])
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("XDG_CONFIG_HOME", dir.path().join(".config"))
+        .env("XDG_STATE_HOME", dir.path().join(".local/state"))
+        .env("XDG_DATA_HOME", dir.path().join(".local/share"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(value["key"]["name"], old);
+    assert_eq!(value["key"]["retired"], true);
+    assert_eq!(
+        std::fs::read(paths.state.join("state.toml")).unwrap(),
+        before
+    );
+}

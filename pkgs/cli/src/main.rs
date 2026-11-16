@@ -85,8 +85,8 @@ enum Commands {
     Provision(Empty),
     /// Replace a key generation under the same name; preserve the old decryption key
     Rebuild(RebuildArgs),
-    /// List registered and user-config keys with their status and source
-    List(Empty),
+    /// List active registered and user-config keys with their status and source
+    List(ListArgs),
     /// Show information for a registered or user-config key
     Get(KeyArgs),
     /// Write missing or outdated public-key files
@@ -178,6 +178,13 @@ struct GhSyncArgs {
     /// Command prefix used to invoke gh (shell-style quoting)
     #[usage(long, default = "gh")]
     cmd: String,
+}
+
+#[derive(Args)]
+struct ListArgs {
+    /// Include retired key generations
+    #[usage(long)]
+    retired: bool,
 }
 
 #[derive(Args)]

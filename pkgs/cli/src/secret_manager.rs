@@ -111,6 +111,15 @@ fn recipients(config: &Config, selected: &[String]) -> Result<(Vec<String>, Vec<
         .collect::<Result<Vec<_>>>()?;
     Ok((names, public))
 }
+fn enrollment_candidates(state: &State) -> Vec<String> {
+    state
+        .keys
+        .iter()
+        .filter(|(_, record)| !record.retired && record.mode == Mode::Prompt)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 fn check_configured_identity(config: &seccy_core::Config, state: &State, name: &str) -> Result<()> {
     let record = state.keys.get(name);
     let alias = record.and_then(|r| r.alias.as_deref()).unwrap_or(name);
@@ -417,12 +426,7 @@ pub fn run(
             crate::server::private_dir(&paths.state)?;
             let _lock = crate::server::lock(&paths.state.join("state.lock"))?;
             let mut state = State::load(paths)?;
-            let candidates = state
-                .keys
-                .iter()
-                .filter(|(_, r)| r.mode == Mode::Prompt)
-                .map(|(n, _)| n.clone())
-                .collect::<Vec<_>>();
+            let candidates = enrollment_candidates(&state);
             let key = match enroll.key {
                 Some(k) => k,
                 None => choose(&candidates, "prompt key", output)?,
@@ -836,6 +840,12 @@ mod recovery_tests {
         state.keys.get_mut("auth").unwrap().fingerprint =
             Some(envelope::fingerprint(&public(2)).unwrap());
         state.keys.insert("old-generation".into(), retired);
+        // The picker offers active keys, while old ciphertext still resolves below.
+        assert_eq!(enrollment_candidates(&state), vec!["auth"]);
+        let mut notify = state.keys["auth"].clone();
+        notify.mode = Mode::Notify;
+        state.keys.insert("notification-only".into(), notify);
+        assert_eq!(enrollment_candidates(&state), vec!["auth"]);
         assert_eq!(
             select_identity(&state, &parsed, None).unwrap(),
             "old-generation"

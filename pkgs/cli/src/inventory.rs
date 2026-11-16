@@ -963,7 +963,10 @@ pub fn run(
             } else {
                 let mut output = Vec::new();
                 let mut text = Vec::new();
-                for name in state.keys.keys() {
+                for (name, record) in &state.keys {
+                    if record.retired && matches!(&command, Commands::List(args) if !args.retired) {
+                        continue;
+                    }
                     let mut updated = false;
                     if matches!(command, Commands::Sync(_))
                         && let Some(identity) = state.identity(&store, name)?
