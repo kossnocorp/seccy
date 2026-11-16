@@ -1,0 +1,9 @@
+[sources]
+"http:https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/bitbucket/bitbucket-original.svg" = "sha256:6d3b83235eea8714cad68a187ff7b0960edb3a70f161dc5b0f273376fe45c04c"
+"http:https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/git/git-original.svg" = "sha256:717a57ea97bf7e86de721dab3e68afac66332a10676d5c9abce4ae6a5a9c9983"
+"http:https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/github/github-original.svg" = "sha256:45262793de6292206a895ed63593cdb1eaed82074173f7f4b5bdb3e427ca805a"
+"http:https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/gitlab/gitlab-original.svg" = "sha256:d057a46d414f4edcb7edf96976ef7b91c2b347a990e99685e48d38de737967b0"
+"http:https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/cloud_download.svg" = "sha256:0d135ed8c43568ebc7ab8f2f307dd374092cb4d0ff7f183c5f6f31daf5be89d2"
+"http:https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/cloud_upload.svg" = "sha256:50b7d5138b699ddcba93a6ac904312f9c77fc3f299b103e7c6c1e8d8dcfca067"
+"http:https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/commit.svg" = "sha256:c6c00152fffc69445f607a5b657cf8283cc93a6208e512b12dce7b9a9675eb7e"
+"http:https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/key.svg" = "sha256:660ccfc916483187f7821ef6e7a1dc088ecb5352b20ab5aa3edba7fb6116effd"
