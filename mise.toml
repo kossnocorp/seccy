@@ -68,6 +68,7 @@ run = [
   "bash -n scripts/build.sh",
   "bash -n scripts/macos-ci.sh",
   "bash -n pkgs/macos/scripts/package.sh",
+  "bash -n pkgs/macos/scripts/build-icon.sh",
   "bash -n pkgs/macos/scripts/notarize.sh",
   "bash -n pkgs/macos/scripts/notarize-setup.sh",
   "bash -n pkgs/linux/scripts/release.sh",
@@ -239,3 +240,17 @@ mise run //:release:version
 git push
 git push --tags
 '''
+
+[tasks."macos:ui:build"]
+description = "Build the SwiftUI gallery (no signing credentials required)"
+run = "xcodebuild -quiet -project pkgs/macos-ui/SeccyUI.xcodeproj -scheme Gallery -configuration Debug -destination 'platform=macOS' -derivedDataPath target/xcode CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build"
+
+[tasks."macos:ui"]
+description = "Run the SwiftUI gallery in the foreground with event logs on stdout"
+depends = ["macos:ui:build"]
+run = "exec 'target/xcode/Build/Products/Debug/Seccy UI Gallery.app/Contents/MacOS/Seccy UI Gallery'"
+
+[tasks."macos:ui:check"]
+description = "Build the gallery and test UI request/lifecycle invariants"
+depends = ["macos:ui:build"]
+run = "swift test --package-path pkgs/macos-ui --scratch-path target/swift-tests"

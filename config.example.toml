@@ -19,3 +19,7 @@ email = "work@example.com"
 [keys.secrets]
 use = "secrets"
 name = "Machine secrets"
+
+# Opt in to the custom SwiftUI prompt (restart the agent after changing).
+[experimental]
+macos_ui = false

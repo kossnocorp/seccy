@@ -59,16 +59,8 @@ cp "$root/pkgs/fnox/provider.lua" "$plugin/provider.lua"
 cp "$root/target/release/seccy" "$binaries/seccy"
 cp "$profile_path" "$contents/embedded.provisionprofile"
 
-# Build the standard macOS icon sizes from the source artwork.
-iconset="$temporary/Seccy.iconset"
-mkdir -p "$iconset"
-for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$root/assets/icon-macos.png" \
-        --out "$iconset/icon_${size}x${size}.png" >/dev/null
-    sips -z "$((size * 2))" "$((size * 2))" "$root/assets/icon-macos.png" \
-        --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$iconset" -o "$contents/Resources/Seccy.icns"
+# Use the same source artwork and conversion as the gallery.
+bash "$root/pkgs/macos/scripts/build-icon.sh" "$contents/Resources/Seccy.icns"
 
 # plutil handles XML escaping; values are arguments rather than generated XML.
 info="$contents/Info.plist"
@@ -81,8 +73,8 @@ plutil -insert CFBundlePackageType -string APPL "$info"
 version=$(cd "$root" && cargo metadata --no-deps --format-version 1 --locked | jaq -r '.packages[] | select(.name == "seccy_cli") | .version')
 plutil -insert CFBundleVersion -string "$version" "$info"
 plutil -insert CFBundleShortVersionString -string "$version" "$info"
-plutil -insert LSMinimumSystemVersion -string 11.0 "$info"
-plutil -insert LSBackgroundOnly -bool YES "$info"
+plutil -insert LSMinimumSystemVersion -string 12.0 "$info"
+plutil -insert LSUIElement -bool YES "$info"
 
 entitlements="$root/target/seccy.entitlements.plist"
 plutil -create xml1 "$entitlements"

@@ -161,7 +161,16 @@ impl KeyConfig {
 }
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct Experimental {
+    #[serde(default)]
+    pub macos_ui: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub experimental: Experimental,
     pub log_level: Option<String>,
     pub email: Option<String>,
     pub provider: Option<Selector>,

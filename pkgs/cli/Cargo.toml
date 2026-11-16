@@ -39,3 +39,6 @@ p256 = "0.13"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 seccy_linux.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+seccy_macos_ui = { path = "../macos-ui" }

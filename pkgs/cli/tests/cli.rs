@@ -664,3 +664,32 @@ fn list_hides_retired_generations_unless_requested() {
         before
     );
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn experimental_macos_ui_and_default_paths_preserve_cli_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("seccy/config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    for setting in [
+        "",
+        "[experimental]\nmacos_ui=false",
+        "[experimental]\nmacos_ui=true",
+    ] {
+        std::fs::write(&config, setting).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_seccy"))
+            .args(["--version"])
+            .env("XDG_CONFIG_HOME", dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("seccy {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}

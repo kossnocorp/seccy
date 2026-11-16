@@ -15,6 +15,7 @@ plist = "1"
 zeroize = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+seccy_macos_ui = { path = "../macos-ui" }
 security-framework = { version = "3.7", features = ["OSX_10_15"] }
 security-framework-sys = { version = "2", features = ["OSX_10_15"] }
 libc = "0.2"

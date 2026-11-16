@@ -15,3 +15,7 @@ pkgs/website/worker-configuration.d.ts
 pkgs/website/public/install.sh
 # Managed by VS Code Orchardist extension:
 seccy.wt.code-workspace
+
+# Swift / Xcode
+pkgs/macos-ui/.build/
+**/xcuserdata/

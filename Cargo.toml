@@ -16,3 +16,8 @@ tracing = "0.1"
 seccy_core = { path = "pkgs/core" }
 seccy_macos = { path = "pkgs/macos" }
 seccy_linux = { path = "pkgs/linux" }
+
+# Xcode 27/dyld rejects stripped build-time proc macros with a misaligned
+# LINKEDIT string pool at the macOS 12 deployment target. These are not shipped.
+[profile.release.build-override]
+strip = "none"

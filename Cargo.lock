@@ -962,6 +962,7 @@ dependencies = [
  "seccy_core",
  "seccy_linux",
  "seccy_macos",
+ "seccy_macos_ui",
  "serde",
  "serde_json",
  "sha2",
@@ -1032,6 +1033,7 @@ dependencies = [
  "objc2-local-authentication",
  "plist",
  "seccy_core",
+ "seccy_macos_ui",
  "security-framework",
  "security-framework-sys",
  "serde",
@@ -1039,6 +1041,18 @@ dependencies = [
  "tempfile",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "seccy_macos_ui"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "objc2",
+ "objc2-foundation",
+ "objc2-local-authentication",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
