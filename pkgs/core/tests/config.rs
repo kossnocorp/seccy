@@ -57,3 +57,20 @@ fn obsolete_user_table_is_rejected_even_when_empty() {
         assert!(error.contains("unknown field `user`"), "{error}");
     }
 }
+
+#[test]
+fn experimental_macos_ui_is_explicitly_opt_in() {
+    assert!(!Config::default().experimental.macos_ui);
+    for text in ["", "[experimental]", "[experimental]\nmacos_ui=false"] {
+        assert!(!Config::parse(text).unwrap().experimental.macos_ui);
+    }
+    assert!(
+        Config::parse("[experimental]\nmacos_ui=true")
+            .unwrap()
+            .experimental
+            .macos_ui
+    );
+    assert!(Config::parse("[experimental]\nmacos_ui='true'").is_err());
+    assert!(Config::parse("[experimental]\nunknown=true").is_err());
+    assert!(Config::parse("[experimental]\nui=true").is_err());
+}

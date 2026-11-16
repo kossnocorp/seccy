@@ -94,7 +94,7 @@ last fetch. Pushing release tags starts the corresponding GitHub Actions workflo
 
 ## macOS packaging
 
-Requires an Apple Silicon or Secure Enclave-equipped Intel Mac, a logged-in GUI user session, and enrolled Touch ID for `prompt` keys. Keys are non-exportable P-256 (`ecdsa-sha2-nistp256`); there is no software fallback or private-key import.
+Requires macOS 12 or later, Xcode to build from source, an Apple Silicon or Secure Enclave-equipped Intel Mac, a logged-in GUI user session, and enrolled Touch ID for `prompt` keys. Keys are non-exportable P-256 (`ecdsa-sha2-nistp256`); there is no software fallback or private-key import.
 
 The data-protection keychain requires a code-signing identity and a provisioning profile authorizing the app identifier and keychain group. A plain `cargo build` is sufficient for tests and commands with an empty config, but is not a deployment build for keychain operations. See [Apple TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
 
@@ -325,7 +325,13 @@ Empty and relative XDG values are ignored, as required by the XDG specification.
 
 Touch ID uses `biometryCurrentSet` plus `privateKeyUsage`: password fallback is not enabled, and changing enrolled fingerprints invalidates access. Notification-only keys use `privateKeyUsage`. Both modes require an unlocked device and use device-only keychain protection.
 
-Notifications are submitted via `/usr/bin/osascript`; enable notifications for that sender in macOS. macOS notification settings and Focus can suppress banners. Failure to submit a notification causes the agent to withhold the signature. Agent events also record successful signature responses.
+Notifications use native macOS UserNotifications with the Seccy app's identity
+and icon, regardless of `experimental.macos_ui`. Run the signed bundled executable.
+macOS requests permission on the first notification; enable Seccy in System Settings
+→ Notifications if denied. Notification settings and Focus can suppress banners.
+Failure to authorize or submit a notification causes the agent to withhold the
+signature. Successful submission does not prove that a banner was visible.
+Agent events also record successful signature responses.
 
 Both notifications and Touch ID's custom authentication reason include the key
 name/fingerprint/mode, signature algorithm, payload size, client executable/PID,
@@ -400,7 +406,7 @@ Collection is read-only, with bounded buffers, file sizes, and ancestry depth;
 individual OS/filesystem calls are synchronous, not subject to a hard timeout.
 It does not use Accessibility, window enumeration, screenshots, or automation
 permissions. Full metadata is in `caller_json`; prompts show the useful observed
-context and may be truncated by macOS.
+context in the system prompt, or a scrollable SwiftUI panel when experimental UI is enabled.
 
 At `debug`/`trace`, a `sign_payload` event additionally contains the **exact bytes
 passed to the signing backend**, encoded as base64 in `fields.payload`, and a
@@ -459,19 +465,37 @@ This replaces the default list (up to 16 files). Missing files are ignored;
 unreadable/non-regular files and files larger than 4 MiB are skipped with lookup
 notes. At most 64 key matches are retained. Files are reread for each request.
 
-macOS controls the Touch ID window's layout, typography, size, and biometric
-controls. `LAContext` lets us set the reason and cancel/fallback labels and control
-authentication reuse. It does not provide custom fields or extra action buttons.
-The packaged application supplies its name and icon through
-`Seccy.app/Contents/Info.plist`: `CFBundleIconFile` points to
-`Resources/Seccy.icns`, generated from `assets/icon-macos.png`. Run
-`Seccy.app/Contents/MacOS/seccy` and retain the whole bundle; the standalone
-`target/release/seccy` executable does not carry this app icon. Verify the Touch
-ID icon interactively after packaging, since macOS controls the authentication
-UI and application attribution. Key-use notifications currently use `osascript`,
-whose notification identity/icon is separate from the Seccy bundle. Long
-descriptions may be truncated by macOS; logs retain the complete decoded
-information.
+The default macOS prompt remains Apple's built-in window with the original
+plain-text copy. Opt in to the new prompt in `~/.config/seccy/config.toml`
+(or `$XDG_CONFIG_HOME/seccy/config.toml`), then restart the agent:
+
+```toml
+[experimental]
+macos_ui = true
+```
+
+The experimental authorization panel is built with SwiftUI in
+[`pkgs/macos-ui`](pkgs/macos-ui/README.md). It shows a native, live Touch ID
+status view, bold key and process identity, selectable text, and scrollable
+request details. It follows the system appearance. Cancel, window close, and a
+120-second timeout deny the request. Retry never bypasses authentication.
+A fresh `LAContext` is passed to the actual key operation, then invalidated on
+every return path. Secure Enclave `biometryCurrentSet` ACLs remain enforced.
+Approvals apply only to this request (or an explicitly named secrets batch);
+remembered process permissions are not implemented.
+
+Run `mise run macos:ui` for the state gallery, or open
+`pkgs/macos-ui/SeccyUI.xcodeproj` and select **Gallery**. The live Touch ID demo and simulated previews never access
+keys. Preview controls and the production-shaped prompt are separate windows.
+The gallery defaults to system appearance and offers Light/Dark overrides and a
+notification trigger using the production notification sender.
+
+The SwiftUI library is linked into the existing signed `Seccy.app` executable;
+keep the whole bundle and embedded profile together. The bundle uses
+`LSUIElement` so the background agent can present windows without a permanent
+Dock icon. Native notifications use the same bundle icon and never open Script
+Editor or Finder. No custom notification actions are registered yet. Logs retain
+the complete decoded request information.
 
 ## SSH / Git transport
 

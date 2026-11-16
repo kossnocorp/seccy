@@ -208,6 +208,28 @@ fn emit(output: &Output, value: serde_json::Value, text: &str) -> Result<()> {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    seccy_macos_ui::configure_notifications();
+    #[cfg(target_os = "macos")]
+    if seccy_core::storage::Paths::from_env()
+        .and_then(|paths| Config::load(&paths.config))
+        .is_ok_and(|config| config.experimental.macos_ui)
+    {
+        seccy_macos_ui::run(cli_entry);
+        return;
+    }
+    cli_main();
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn cli_entry() {
+    // Never unwind across the Swift/C ABI. Normal CLI completion exits explicitly.
+    if std::panic::catch_unwind(cli_main).is_err() {
+        std::process::exit(1);
+    }
+}
+
+fn cli_main() {
     let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let app = match App::embedded_outcome(&argv) {
         usage_rs::embedded::Outcome::Parsed(app) => app,

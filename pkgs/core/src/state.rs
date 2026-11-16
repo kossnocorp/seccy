@@ -49,6 +49,7 @@ impl State {
         // Reuse configuration validation for names and emails before filesystem access.
         for (name, record) in &state.keys {
             let config = Config {
+                experimental: Default::default(),
                 log_level: None,
                 email: None,
                 keys: [(

@@ -12,3 +12,7 @@ mode = "notify"
 github = "signing"
 # Optional per-key override; otherwise inherits the top-level email.
 email = "work@example.com"
+
+# Opt in to the custom SwiftUI prompt (restart the agent after changing).
+[experimental]
+macos_ui = false

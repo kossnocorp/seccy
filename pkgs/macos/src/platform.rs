@@ -1,10 +1,8 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use core_foundation::base::{CFType, TCFType};
-use objc2::rc::Retained;
-use objc2_foundation::NSString;
-use objc2_local_authentication::LAContext;
 use seccy_core::{Caller, Identity, KeyStore, Mode, ProcessInfo};
+use seccy_macos_ui::{Authorization, Request};
 use security_framework::{
     access_control::{ProtectionMode, SecAccessControl},
     item::{ItemSearchOptions, KeyClass, Location, Reference, SearchResult},
@@ -13,10 +11,7 @@ use security_framework::{
 use security_framework_sys::access_control::{
     kSecAccessControlBiometryCurrentSet, kSecAccessControlPrivateKeyUsage,
 };
-use std::{
-    os::{fd::AsRawFd, unix::net::UnixStream},
-    process::Command,
-};
+use std::os::{fd::AsRawFd, unix::net::UnixStream};
 
 pub struct SecureEnclave;
 
@@ -183,33 +178,38 @@ impl SecureEnclave {
                 .map(|(key, _, _)| key.name.as_str())
                 .collect::<Vec<_>>(),
         );
-        let context = authentication_context(Mode::Prompt, &details);
-        let result = (|| {
-            let mut plaintexts = Vec::new();
-            for ((expected, _, _), ciphertext) in items.iter().zip(ciphertexts) {
-                let key =
-                    lookup_with_context(&expected.name, expected.mode, as_cf_context(&context))?
-                        .context("key no longer exists")?;
-                ensure!(
-                    identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
-                    "key changed; restart agent"
-                );
-                let plaintext = zeroize::Zeroizing::new(key.decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
+        let context = authentication_context(
+            Mode::Prompt,
+            &details,
+            &items
+                .iter()
+                .map(|(key, _, _)| key.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            &items
+                .iter()
+                .map(|(key, _, _)| key.fingerprint.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            caller,
+        )?;
+        let mut plaintexts = Vec::new();
+        for ((expected, _, _), ciphertext) in items.iter().zip(ciphertexts) {
+            let key = lookup_with_context(&expected.name, expected.mode, as_cf_context(&context))?
+                .context("key no longer exists")?;
+            ensure!(
+                identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
+                "key changed; restart agent"
+            );
+            let plaintext = zeroize::Zeroizing::new(key.decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
                     .map_err(|_| anyhow!("decryption failed: authorization cancelled or unavailable, invalidated key, or damaged ciphertext"))?);
-                ensure!(
-                    plaintext.len() <= MAX_SECRET_BYTES,
-                    "decrypted secret exceeds 64 KiB"
-                );
-                plaintexts.push(plaintext);
-            }
-            Ok(plaintexts)
-        })();
-        if let Some(context) = context {
-            unsafe {
-                context.invalidate();
-            }
+            ensure!(
+                plaintext.len() <= MAX_SECRET_BYTES,
+                "decrypted secret exceeds 64 KiB"
+            );
+            plaintexts.push(plaintext);
         }
-        result
+        Ok(plaintexts)
     }
 
     /// Name is display context only; managed envelopes authenticate it separately.
@@ -230,7 +230,13 @@ impl SecureEnclave {
         } else {
             expected.decrypt_description("ECIES P-256/SHA-256/AES-GCM", caller)
         };
-        let context = authentication_context(expected.mode, &details);
+        let context = authentication_context(
+            expected.mode,
+            &details,
+            &expected.name,
+            &expected.fingerprint,
+            caller,
+        )?;
         let key = lookup_with_context(&expected.name, expected.mode, as_cf_context(&context))?
             .context("key no longer exists")?;
         ensure!(
@@ -314,24 +320,35 @@ pub fn wrap_secret_key(recipient: &str, file_key: &[u8]) -> Result<String> {
     encrypt_envelope(&public, &expected, file_key)
 }
 
-fn authentication_context(mode: Mode, details: &str) -> Option<Retained<LAContext>> {
+fn authentication_context(
+    mode: Mode,
+    details: &str,
+    key: &str,
+    fingerprint: &str,
+    caller: &Caller,
+) -> Result<Option<Authorization>> {
     if mode != Mode::Prompt {
-        return None;
+        return Ok(None);
     }
-    // SAFETY: this context is confined to one request (a single operation or explicit batch).
-    let context = unsafe { LAContext::new() };
-    unsafe {
-        context.setLocalizedReason(&NSString::from_str(details));
-        context.setTouchIDAuthenticationAllowableReuseDuration(0.0);
-        context.setLocalizedFallbackTitle(Some(&NSString::from_str("")));
-    }
-    Some(context)
+    seccy_macos_ui::authenticate(&Request {
+        details: details.into(),
+        key: key.into(),
+        fingerprint: fingerprint.into(),
+        executable: caller.executable.clone(),
+        pid: caller.pid,
+    })
+    .map(Some)
 }
 
-fn as_cf_context(context: &Option<Retained<LAContext>>) -> Option<CFType> {
-    context.as_ref().map(|context| {
-        // SAFETY: Security.framework accepts LAContext, retained under the get rule.
-        unsafe { CFType::wrap_under_get_rule(Retained::as_ptr(context).cast()) }
+fn as_cf_context(context: &Option<Authorization>) -> Option<CFType> {
+    context.as_ref().map(|authorization| {
+        // SAFETY: Security.framework accepts this retained LAContext. It is used
+        // only for this operation/batch and invalidated by Authorization::drop.
+        unsafe {
+            CFType::wrap_under_get_rule(
+                (authorization.context() as *const objc2_local_authentication::LAContext).cast(),
+            )
+        }
     })
 }
 
@@ -419,7 +436,13 @@ impl KeyStore for SecureEnclave {
         let details = expected.sign_description(message.len(), caller, payload);
         // Fresh context for every signature, attached to the actual key operation.
         // Keychain ACLs still enforce biometryCurrentSet; this only customizes UI.
-        let context = authentication_context(expected.mode, &details);
+        let context = authentication_context(
+            expected.mode,
+            &details,
+            &expected.name,
+            &expected.fingerprint,
+            caller,
+        )?;
         let cf_context = as_cf_context(&context);
         let key = lookup_with_context(&expected.name, expected.mode, cf_context)?
             .context("key no longer exists")?;
@@ -439,16 +462,7 @@ impl KeyStore for SecureEnclave {
 }
 
 fn notify(title: &str, message: &str) -> Result<()> {
-    // Pass untrusted text as argv, never interpolate it into AppleScript source.
-    let output = Command::new("/usr/bin/osascript")
-        .args(["-e", "on run argv\ndisplay notification (item 1 of argv) with title (item 2 of argv)\nend run", "--", message, title])
-        .output().context("send key-use notification")?;
-    ensure!(
-        output.status.success(),
-        "notification failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(())
+    seccy_macos_ui::notify(title, message)
 }
 
 pub fn caller(stream: &UnixStream) -> Result<Caller> {
