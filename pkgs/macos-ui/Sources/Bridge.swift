@@ -35,8 +35,33 @@ func makeAuthorizationWindow<Content: View>(_ content: Content) -> NSWindow {
     window.title = Copy.text("ui-window-title")
     window.styleMask = [.titled, .closable]
     window.isReleasedWhenClosed = false
-    window.center()
+    window.level = .modalPanel
+    window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     return window
+}
+
+func showAuthorizationWindow(_ window: NSWindow) {
+    // Pick the user's current display before activating Seccy. NSWindow.center()
+    // uses AppKit's placement rules rather than the visible frame's true center.
+    let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+        ?? NSScreen.main
+    func center() {
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard let visible = screen?.visibleFrame else { return }
+        window.setFrameOrigin(NSPoint(x: visible.midX - window.frame.width / 2,
+                                      y: visible.midY - window.frame.height / 2))
+    }
+    center()
+    window.makeKeyAndOrderFront(nil)
+    NSApp.activate(ignoringOtherApps: true)
+    // Hosting views can finalize their size only after joining a visible window.
+    DispatchQueue.main.async { [weak window] in
+        guard let window = window, window.isVisible else { return }
+        window.contentView?.layoutSubtreeIfNeeded()
+        guard let visible = screen?.visibleFrame else { return }
+        window.setFrameOrigin(NSPoint(x: visible.midX - window.frame.width / 2,
+                                      y: visible.midY - window.frame.height / 2))
+    }
 }
 
 private final class PromptController: NSObject, ObservableObject, NSWindowDelegate {
@@ -57,9 +82,7 @@ private final class PromptController: NSObject, ObservableObject, NSWindowDelega
         let content = PromptContent(controller: self)
         window = makeAuthorizationWindow(content)
         window.delegate = self
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        showAuthorizationWindow(window)
         DispatchQueue.main.async { [weak self] in self?.authenticate() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in self?.cancel() }
         NSApp.runModal(for: window)

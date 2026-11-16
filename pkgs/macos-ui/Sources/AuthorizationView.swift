@@ -374,20 +374,9 @@ final class GalleryModel: NSObject, ObservableObject, NSWindowDelegate {
             let window = makeAuthorizationWindow(GalleryPrompt(model: self, authentication: authentication))
             window.delegate = self
             previewWindow = window
-            if let controls = NSApp.windows.first(where: { $0.title == Copy.text("gallery-title") }),
-               let screen = controls.screen {
-                let visible = screen.visibleFrame
-                let total = controls.frame.width + window.frame.width + 16
-                if total <= visible.width {
-                    let left = visible.midX - total / 2
-                    controls.setFrameOrigin(NSPoint(x: left, y: visible.midY - controls.frame.height / 2))
-                    window.setFrameOrigin(NSPoint(x: left + controls.frame.width + 16,
-                                                  y: visible.midY - window.frame.height / 2))
-                }
-            }
             applyAppearance()
         }
-        previewWindow?.makeKeyAndOrderFront(nil)
+        if let window = previewWindow { showAuthorizationWindow(window) }
     }
 
     func start() {
