@@ -196,7 +196,7 @@ includes plaintext. `--jq`, `--jq-raw` and `--jq-exit-status` work as usual.
 provided, and adds them to the child's inherited environment. On macOS, one
 batch request uses a single Touch ID authorization context with the selected
 secret names in the prompt. The context is invalidated after the batch; a later
-invocation requires fresh authorization. Restart the agent after upgrading to
+decryption requires fresh authorization. Restart the agent after upgrading to
 use the batch protocol. Batches must fit the agent's 256 KiB request/response
 frame limit. It starts no child
 if authorization fails. NUL bytes cannot be represented in environment variables
@@ -204,6 +204,17 @@ and are rejected; other bytes are preserved on Unix. The child receives normal
 stdin/stdout/stderr and its exit status/signals are preserved. `exec` does not
 support structured output because stdout belongs to the child. Use `--` before
 the command; flags after it belong to that command.
+
+For each selected secret, `exec` also sets `__SECCY_<NAME>__` to `sha256:<hex>`,
+the SHA-256 hash of the full encoded secret value. A nested `exec` reuses the
+inherited secret when this marker matches its effective secret definition and
+the environment value is present (including an empty value). Only cache misses
+are decrypted in the batch; if every secret matches, no agent request is needed.
+Changing the encoded value, including re-encryption or a different scoped
+definition, invalidates the marker. Unset the marker to force decryption.
+Names matching `__SECCY_*__` are reserved for these markers in `exec`.
+Markers identify the encrypted source and trust the inherited environment;
+they do not authenticate an environment value modified by the child.
 
 Environment injection deliberately exposes plaintext to the command and its
 children. Seccy neither logs values nor guarantees that the invoked program will

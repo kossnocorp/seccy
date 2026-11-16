@@ -8,6 +8,7 @@ use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use seccy_core::{Mode, envelope, state::State, storage::Paths};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs::OpenOptions,
@@ -407,11 +408,32 @@ pub fn run(
             ensure!(distinct.len() == names.len(), "duplicate secret name");
             for name in &names {
                 ensure!(config.secrets.contains_key(name), "unknown secret {name}");
+                ensure!(
+                    !(name.starts_with("__SECCY_") && name.ends_with("__")),
+                    "secret {name} uses the reserved exec fingerprint namespace __SECCY_*__"
+                );
             }
             let mut child = Command::new(&command[0]);
             child.args(&command[1..]);
-            let values = decrypt_batch(&names, &config, args.identity.as_deref(), &key_config)?;
-            for (name, bytes) in names.iter().zip(values) {
+            let mut pending = Vec::new();
+            for name in &names {
+                let marker = format!("__SECCY_{name}__");
+                let fingerprint =
+                    format!("sha256:{:x}", Sha256::digest(&config.secrets[name].value));
+                // The marker identifies ciphertext, not plaintext. Trust the inherited
+                // value only when both it and the matching source marker are present.
+                let inherited = std::env::var_os(&marker)
+                    .filter(|value| value == fingerprint.as_str())
+                    .and_then(|_| std::env::var_os(name));
+                if let Some(value) = inherited {
+                    child.env(name, value);
+                } else {
+                    pending.push(name.clone());
+                }
+                child.env(marker, fingerprint);
+            }
+            let values = decrypt_batch(&pending, &config, args.identity.as_deref(), &key_config)?;
+            for (name, bytes) in pending.iter().zip(values) {
                 ensure!(
                     !bytes.contains(&0),
                     "secret {name} contains NUL and cannot be an environment value"

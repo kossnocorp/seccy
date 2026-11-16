@@ -294,6 +294,137 @@ fn exec_selection_all_arguments_exit_status_and_auth_failure() {
     }
 }
 #[test]
+fn nested_exec_reuses_inherited_values_without_another_agent_request() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let dir = dir.path();
+    initialize(dir);
+    set(dir, "TOKEN", b"secret");
+    set(dir, "EMPTY", b"");
+    // The mock closes after the outer batch. Any nested decryption must fail.
+    let server = mock_agent(dir, vec![Ok(Vec::new()), Ok(b"secret\xff\n".to_vec())]);
+    let out = cmd(dir)
+        .args(["s", "exec", "--"])
+        .arg(env!("CARGO_BIN_EXE_seccy"))
+        .args(["s", "exec", "--"])
+        .arg(env!("CARGO_BIN_EXE_seccy"))
+        .args([
+            "s",
+            "exec",
+            "TOKEN",
+            "EMPTY",
+            "--",
+            "/bin/sh",
+            "-c",
+            "test \"${EMPTY+x}\" = x && test -z \"$EMPTY\" && printf '%s' \"$TOKEN\"",
+        ])
+        .env_remove("__SECCY_TOKEN__")
+        .env_remove("__SECCY_EMPTY__")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout, b"secret\xff\n");
+    assert_eq!(server.join().unwrap().len(), 1);
+}
+
+fn exec_fingerprint(dir: &Path, name: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let data: toml::Value =
+        toml::from_str(&fs::read_to_string(dir.join("seccy.toml")).unwrap()).unwrap();
+    format!(
+        "sha256:{:x}",
+        Sha256::digest(data["secrets"][name]["value"].as_str().unwrap())
+    )
+}
+
+#[test]
+fn exec_batches_only_cache_misses_and_refreshes_markers() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let dir = dir.path();
+    initialize(dir);
+    set(dir, "FIRST", b"a");
+    set(dir, "SECOND", b"b");
+    let first = exec_fingerprint(dir, "FIRST");
+    let second = exec_fingerprint(dir, "SECOND");
+    let server = mock_agent(dir, vec![Ok(b"fresh".to_vec())]);
+    let out = cmd(dir)
+        .args([
+            "s",
+            "exec",
+            "--",
+            "/bin/sh",
+            "-c",
+            "test \"$FIRST\" = inherited && test \"$SECOND\" = fresh && printf '%s' \"$__SECCY_SECOND__\"",
+        ])
+        .env("FIRST", "inherited")
+        .env("__SECCY_FIRST__", &first)
+        .env("SECOND", "stale")
+        .env("__SECCY_SECOND__", "mismatched")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout, second.as_bytes());
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    let entries: Value = serde_json::from_str(requests[0]["value"].as_str().unwrap()).unwrap();
+    assert_eq!(entries.as_array().unwrap().len(), 1);
+    assert_eq!(entries[0]["name"], "SECOND");
+}
+
+#[test]
+fn exec_decrypts_when_value_marker_or_source_does_not_match() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let dir = dir.path();
+    initialize(dir);
+    set(dir, "TOKEN", b"secret");
+    let original = exec_fingerprint(dir, "TOKEN");
+    for case in ["missing value", "missing marker", "changed source"] {
+        if case == "changed source" {
+            // Even encrypting the same plaintext again changes its source fingerprint.
+            set(dir, "TOKEN", b"secret");
+            assert_ne!(exec_fingerprint(dir, "TOKEN"), original);
+        }
+        let server = mock_agent(dir, vec![Ok(b"decrypted".to_vec())]);
+        let mut command = cmd(dir);
+        command
+            .args([
+                "s",
+                "exec",
+                "TOKEN",
+                "--",
+                "/bin/sh",
+                "-c",
+                "test \"$TOKEN\" = decrypted && printf '%s' \"$__SECCY_TOKEN__\"",
+            ])
+            .env("TOKEN", "stale")
+            .env("__SECCY_TOKEN__", &original);
+        if case == "missing value" {
+            command.env_remove("TOKEN");
+        } else if case == "missing marker" {
+            command.env_remove("__SECCY_TOKEN__");
+        }
+        let out = command.output().unwrap();
+        assert!(out.status.success(), "{case}: {out:?}");
+        assert_eq!(out.stdout, exec_fingerprint(dir, "TOKEN").as_bytes());
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn exec_rejects_secret_names_in_the_marker_namespace() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let dir = dir.path();
+    initialize(dir);
+    set(dir, "__SECCY_TOKEN__", b"value");
+    let out = cmd(dir)
+        .args(["s", "exec", "--", "/usr/bin/touch", "SHOULD_NOT_EXIST"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("reserved exec fingerprint namespace"));
+    assert!(!dir.join("SHOULD_NOT_EXIST").exists());
+}
+
+#[test]
 fn reencrypt_failure_is_atomic_and_success_updates_recipients() {
     let dir = tempfile::tempdir_in("/tmp").unwrap();
     let dir = dir.path();
