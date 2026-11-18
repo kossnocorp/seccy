@@ -205,16 +205,31 @@ stdin/stdout/stderr and its exit status/signals are preserved. `exec` does not
 support structured output because stdout belongs to the child. Use `--` before
 the command; flags after it belong to that command.
 
-For each selected secret, `exec` also sets `__SECCY_<NAME>__` to `sha256:<hex>`,
+Use `SOURCE:DEST` to expose a configured secret under another environment name:
+
+```sh
+seccy s exec CLOUDFLARE_ACCOUNT_ID_PERSONAL:CLOUDFLARE_ACCOUNT_ID -- wrangler whoami
+```
+
+This sets only the destination in the child; it does not rename the configured
+secret. You can select a source more than once with distinct destinations;
+it is decrypted at most once per batch.
+
+For each unaliased secret, `exec` also sets `__SECCY_<NAME>__` to `sha256:<hex>`,
 the SHA-256 hash of the full encoded secret value. A nested `exec` reuses the
 inherited secret when this marker matches its effective secret definition and
 the environment value is present (including an empty value). Only cache misses
 are decrypted in the batch; if every secret matches, no agent request is needed.
 Changing the encoded value, including re-encryption or a different scoped
-definition, invalidates the marker. Unset the marker to force decryption.
+definition, invalidates the marker. Unset all markers for a source to force decryption.
 Names matching `__SECCY_*__` are reserved for these markers in `exec`.
-Markers identify the encrypted source and trust the inherited environment;
-they do not authenticate an environment value modified by the child.
+For an alias, the marker lives at `__SECCY_<DEST>__` and records the source
+name, ciphertext fingerprint and a checksum of the bound value. A nested
+`exec SOURCE` or `exec SOURCE:DEST` can reuse the alias. A request for the
+distinct secret `DEST` cannot. Overwriting the alias value invalidates its
+checksum. Markers trust the inherited environment: they do not protect against
+a process that changes both value and marker. Treat alias markers as sensitive,
+since the checksum allows testing guesses about the value.
 
 Environment injection deliberately exposes plaintext to the command and its
 children. Seccy neither logs values nor guarantees that the invoked program will

@@ -337,6 +337,75 @@ fn exec_fingerprint(dir: &Path, name: &str) -> String {
 }
 
 #[test]
+fn nested_aliases_follow_the_source_and_detect_slot_changes() {
+    let tmp = tempfile::tempdir_in("/tmp").unwrap();
+    let dir = tmp.path();
+    initialize(dir);
+    set(dir, "PERSONAL", b"personal");
+    set(dir, "ACCOUNT", b"account");
+    let server = mock_agent(
+        dir,
+        vec![
+            Ok(b"personal".to_vec()),
+            Ok(b"account".to_vec()),
+            Ok(b"personal".to_vec()),
+            Ok(b"new".to_vec()),
+        ],
+    );
+    let out = cmd(dir).env_remove("PERSONAL")
+        .args(["s", "exec", "PERSONAL:ACCOUNT", "--", "/bin/sh", "-ec", r#"
+            test -z "${PERSONAL+x}" && test "$ACCOUNT" = personal
+            "$1" s exec PERSONAL PERSONAL:COPY -- /bin/sh -ec 'test "$PERSONAL:$COPY" = personal:personal'
+            "$1" s exec PERSONAL:ACCOUNT -- /bin/sh -ec 'test "$ACCOUNT" = personal'
+            "$1" s exec ACCOUNT -- /bin/sh -ec 'test "$ACCOUNT" = account'
+            ACCOUNT=overwritten "$1" s exec PERSONAL -- /bin/sh -ec 'test "$PERSONAL" = personal'
+            printf new | "$1" s set PERSONAL --from-stdin
+            "$1" s exec PERSONAL:ACCOUNT -- /bin/sh -ec 'test "$ACCOUNT" = new'
+        "#, "sh", env!("CARGO_BIN_EXE_seccy")]).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let requested: Vec<String> = server
+        .join()
+        .unwrap()
+        .into_iter()
+        .map(|r| {
+            let entries: Vec<Value> = serde_json::from_str(r["value"].as_str().unwrap()).unwrap();
+            assert_eq!(entries.len(), 1);
+            entries[0]["name"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(requested, ["PERSONAL", "ACCOUNT", "PERSONAL", "PERSONAL"]);
+}
+
+#[test]
+fn exec_rejects_invalid_and_colliding_bindings() {
+    let tmp = tempfile::tempdir_in("/tmp").unwrap();
+    let dir = tmp.path();
+    initialize(dir);
+    set(dir, "A", b"a");
+    set(dir, "B", b"b");
+    for (specs, error) in [
+        (vec!["A:", "B"], "invalid environment variable name"),
+        (vec!["A:B:C"], "invalid environment variable name"),
+        (vec!["A:__SECCY_B__"], "reserved exec fingerprint namespace"),
+        (vec!["A:B", "B"], "duplicate exec destination"),
+        (vec!["UNKNOWN:A"], "unknown secret"),
+    ] {
+        let out = cmd(dir)
+            .args(["s", "exec"])
+            .args(specs)
+            .args(["--", "/usr/bin/touch", "SHOULD_NOT_EXIST"])
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(error),
+            "{out:?}"
+        );
+        assert!(!dir.join("SHOULD_NOT_EXIST").exists());
+    }
+}
+
+#[test]
 fn exec_batches_only_cache_misses_and_refreshes_markers() {
     let dir = tempfile::tempdir_in("/tmp").unwrap();
     let dir = dir.path();

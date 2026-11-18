@@ -59,7 +59,7 @@ pub struct NameArgs {
 }
 #[derive(Args)]
 pub struct ExecArgs {
-    /// Optional secret names followed by -- and the command with arguments
+    /// Optional NAME or SOURCE:DEST bindings followed by -- and the command with arguments
     pub args: Vec<String>,
 }
 #[derive(Args)]

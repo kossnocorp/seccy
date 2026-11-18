@@ -10,10 +10,11 @@ use seccy_core::{Mode, envelope, state::State, storage::Paths};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    ffi::{OsStr, OsString},
     fs::OpenOptions,
     io::{IsTerminal, Read, Write},
-    os::unix::{fs::OpenOptionsExt, process::CommandExt},
+    os::unix::{ffi::OsStrExt, fs::OpenOptionsExt, process::CommandExt},
     process::Command,
 };
 use zeroize::Zeroizing;
@@ -178,6 +179,81 @@ fn decrypt(
     }
     Ok(result)
 }
+fn exec_marker(slot: &str) -> String {
+    format!("__SECCY_{slot}__")
+}
+
+fn alias_marker(source: &str, slot: &str, fingerprint: &str, value: &OsStr) -> String {
+    // Bind the check to this encrypted definition and slot, including non-UTF-8 values.
+    let prefix = format!("alias:{source}:{fingerprint}:");
+    let check = Sha256::new()
+        .chain_update(&prefix)
+        .chain_update(slot)
+        .chain_update([0])
+        .chain_update(value.as_bytes())
+        .finalize();
+    format!("{prefix}{check:x}")
+}
+
+// Index only alias markers. A plain marker always describes its own slot.
+fn inherited_aliases() -> BTreeMap<String, Vec<(String, String)>> {
+    let mut aliases = BTreeMap::new();
+    for (key, marker) in std::env::vars_os() {
+        let Some(slot) = key
+            .to_str()
+            .and_then(|k| k.strip_prefix("__SECCY_"))
+            .and_then(|k| k.strip_suffix("__"))
+            .filter(|k| envelope::valid_name(k))
+        else {
+            continue;
+        };
+        let Some((source, _)) = marker
+            .to_str()
+            .and_then(|m| m.strip_prefix("alias:"))
+            .and_then(|m| m.split_once(':'))
+        else {
+            continue;
+        };
+        aliases
+            .entry(source.to_owned())
+            .or_insert_with(Vec::new)
+            .push((slot.to_owned(), marker.into_string().unwrap()));
+    }
+    aliases
+}
+
+struct ExecSource<'a> {
+    name: &'a str,
+    fingerprint: String,
+    slots: Vec<&'a str>,
+}
+
+impl ExecSource<'_> {
+    fn inherited(&self, aliases: &BTreeMap<String, Vec<(String, String)>>) -> Option<OsString> {
+        if std::env::var_os(exec_marker(self.name)).as_deref()
+            == Some(OsStr::new(&self.fingerprint))
+            && let Some(value) = std::env::var_os(self.name)
+        {
+            return Some(value);
+        }
+        aliases.get(self.name)?.iter().find_map(|(slot, marker)| {
+            let value = std::env::var_os(slot)?;
+            (alias_marker(self.name, slot, &self.fingerprint, &value) == *marker).then_some(value)
+        })
+    }
+
+    fn export(&self, child: &mut Command, value: &OsStr) {
+        for &slot in &self.slots {
+            let marker = if slot == self.name {
+                self.fingerprint.clone()
+            } else {
+                alias_marker(self.name, slot, &self.fingerprint, value)
+            };
+            child.env(slot, value).env(exec_marker(slot), marker);
+        }
+    }
+}
+
 fn decrypt_batch(
     names: &[String],
     config: &Config,
@@ -404,33 +480,53 @@ pub fn run(
             } else {
                 names.to_vec()
             };
-            let distinct: BTreeSet<_> = names.iter().collect();
-            ensure!(distinct.len() == names.len(), "duplicate secret name");
-            for name in &names {
-                ensure!(config.secrets.contains_key(name), "unknown secret {name}");
+            let mut destinations = BTreeSet::new();
+            let mut sources = BTreeMap::new();
+            let mut order = Vec::new();
+            for spec in &names {
+                let (name, slot) = spec.split_once(':').unwrap_or((spec, spec));
+                for part in [name, slot] {
+                    ensure!(
+                        envelope::valid_name(part),
+                        "invalid environment variable name in binding {spec}"
+                    );
+                    ensure!(
+                        !(part.starts_with("__SECCY_") && part.ends_with("__")),
+                        "{part} uses the reserved exec fingerprint namespace __SECCY_*__"
+                    );
+                }
+                let secret = config
+                    .secrets
+                    .get(name)
+                    .with_context(|| format!("unknown secret {name}"))?;
                 ensure!(
-                    !(name.starts_with("__SECCY_") && name.ends_with("__")),
-                    "secret {name} uses the reserved exec fingerprint namespace __SECCY_*__"
+                    destinations.insert(slot),
+                    "duplicate exec destination {slot}"
                 );
+                sources
+                    .entry(name)
+                    .or_insert_with(|| {
+                        order.push(name);
+                        ExecSource {
+                            name,
+                            fingerprint: format!("sha256:{:x}", Sha256::digest(&secret.value)),
+                            slots: Vec::new(),
+                        }
+                    })
+                    .slots
+                    .push(slot);
             }
             let mut child = Command::new(&command[0]);
             child.args(&command[1..]);
             let mut pending = Vec::new();
-            for name in &names {
-                let marker = format!("__SECCY_{name}__");
-                let fingerprint =
-                    format!("sha256:{:x}", Sha256::digest(&config.secrets[name].value));
-                // The marker identifies ciphertext, not plaintext. Trust the inherited
-                // value only when both it and the matching source marker are present.
-                let inherited = std::env::var_os(&marker)
-                    .filter(|value| value == fingerprint.as_str())
-                    .and_then(|_| std::env::var_os(name));
-                if let Some(value) = inherited {
-                    child.env(name, value);
+            let aliases = inherited_aliases();
+            for name in order {
+                let source = &sources[name];
+                if let Some(value) = source.inherited(&aliases) {
+                    source.export(&mut child, &value);
                 } else {
-                    pending.push(name.clone());
+                    pending.push(name.to_owned());
                 }
-                child.env(marker, fingerprint);
             }
             let values = decrypt_batch(&pending, &config, args.identity.as_deref(), &key_config)?;
             for (name, bytes) in pending.iter().zip(values) {
@@ -438,8 +534,7 @@ pub fn run(
                     !bytes.contains(&0),
                     "secret {name} contains NUL and cannot be an environment value"
                 );
-                use std::os::unix::ffi::OsStrExt;
-                child.env(name, std::ffi::OsStr::from_bytes(&bytes));
+                sources[name.as_str()].export(&mut child, OsStr::from_bytes(&bytes));
             }
             // exec preserves child exit codes/signals and doesn't expose secrets in argv.
             return Err(child.exec()).context("execute command with secrets");
