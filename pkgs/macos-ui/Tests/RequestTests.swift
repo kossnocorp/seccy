@@ -396,7 +396,14 @@ final class NativeLayoutTests: XCTestCase {
                                          styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        window.setFrame(NSRect(x: 100, y: 200, width: 540, height: 460), display: false)
+        let visible = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let expectedLimit = floor(min(900, (visible?.height ?? 800) * 0.85))
+        // Stay below the cap and away from screen edges when testing centered resizes.
+        let compact = 2 * floor(expectedLimit / 4)
+        let expanded = 2 * floor(expectedLimit / 3)
+        window.setFrame(NSRect(x: (visible?.midX ?? 400) - 270,
+                               y: floor(visible?.midY ?? 400) - compact / 2,
+                               width: 540, height: compact), display: false)
         let center = window.frame.midY
         let host = AuthorizationWindowLayout.Host()
         window.contentView = host
@@ -410,16 +417,15 @@ final class NativeLayoutTests: XCTestCase {
             DispatchQueue.main.async { updated.fulfill() }
             wait(for: [updated], timeout: 2)
         }
-        resize(600)
-        XCTAssertEqual(window.frame.height, 600)
+        resize(expanded)
+        XCTAssertEqual(window.frame.height, expanded)
         XCTAssertEqual(window.frame.midY, center)
-        XCTAssertLessThanOrEqual(limit, 900)
-        XCTAssertLessThanOrEqual(limit, (window.screen?.visibleFrame.height ?? 800) * 0.85)
-        resize(460)
-        XCTAssertEqual(window.frame.height, 460)
+        XCTAssertEqual(limit, expectedLimit)
+        resize(compact)
+        XCTAssertEqual(window.frame.height, compact)
         XCTAssertEqual(window.frame.midY, center)
         resize(2000)
-        XCTAssertEqual(window.frame.height, limit)
+        XCTAssertEqual(window.frame.height, expectedLimit)
     }
 
     func testBorderlessPromptDragExcludesInteractiveRegions() throws {
