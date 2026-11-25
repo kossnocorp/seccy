@@ -7,7 +7,7 @@ fn main() {
     }
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let copy_source = out.join("Copy.generated.swift");
-    std::fs::write(&copy_source, seccy_copy::swift_source()).expect("generate Fluent copy");
+    std::fs::write(&copy_source, seccy_ui::swift_source()).expect("generate Fluent copy");
     let arch = match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
         "aarch64" => "arm64",
         "x86_64" => "x86_64",

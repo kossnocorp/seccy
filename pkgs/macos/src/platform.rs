@@ -183,16 +183,7 @@ impl SecureEnclave {
         let context = authentication_context(
             Mode::Prompt,
             &details,
-            &items
-                .iter()
-                .map(|(key, _, _)| key.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-            &items
-                .iter()
-                .map(|(key, _, _)| key.fingerprint.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
+            &items.iter().map(|(key, _, _)| *key).collect::<Vec<_>>(),
             caller,
             &caller.activity(
                 &items
@@ -204,17 +195,21 @@ impl SecureEnclave {
                     names: items.iter().map(|(_, _, name)| (*name).into()).collect(),
                 },
             ),
+            None,
         )?;
         let mut plaintexts = Vec::new();
         for ((expected, _, _), ciphertext) in items.iter().zip(ciphertexts) {
-            let key = lookup_with_context(&expected.storage_id, expected.mode, as_cf_context(&context))?
-                .context("key no longer exists")?;
+            let key =
+                lookup_with_context(&expected.storage_id, expected.mode, as_cf_context(&context))?
+                    .context("key no longer exists")?;
             ensure!(
                 identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
                 "key changed; restart agent"
             );
-            let plaintext = zeroize::Zeroizing::new(key.decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
-                    .map_err(|e| private_operation_error(expected, "decryption", &e))?);
+            let plaintext = zeroize::Zeroizing::new(
+                key.decrypt_data(ENCRYPTION_ALGORITHM, &ciphertext)
+                    .map_err(|e| private_operation_error(expected, "decryption", &e))?,
+            );
             ensure!(
                 plaintext.len() <= MAX_SECRET_BYTES,
                 "decrypted secret exceeds 64 KiB"
@@ -251,13 +246,14 @@ impl SecureEnclave {
         let context = authentication_context(
             expected.mode,
             &details,
-            &expected.name,
-            &expected.fingerprint,
+            &[expected],
             caller,
             &activity,
+            None,
         )?;
-        let key = lookup_with_context(&expected.storage_id, expected.mode, as_cf_context(&context))?
-            .context("key no longer exists")?;
+        let key =
+            lookup_with_context(&expected.storage_id, expected.mode, as_cf_context(&context))?
+                .context("key no longer exists")?;
         ensure!(
             identity(&key, &expected.name, expected.mode)?.blob == expected.blob,
             "key changed; restart agent"
@@ -344,27 +340,144 @@ pub fn wrap_secret_key(recipient: &str, file_key: &[u8]) -> Result<String> {
 fn authentication_context(
     mode: Mode,
     details: &str,
-    key: &str,
-    fingerprint: &str,
+    keys: &[&Identity],
     caller: &Caller,
     activity: &Activity,
+    signing: Option<(&[u8], &seccy_core::payload::Payload)>,
 ) -> Result<Option<Authorization>> {
-    if mode != Mode::Prompt {
+    let capture_directory = std::env::var("SECCY_CAPTURE_DIR")
+        .ok()
+        .filter(|path| !path.is_empty());
+    if mode != Mode::Prompt && capture_directory.is_none() {
         return Ok(None);
     }
-    seccy_macos_ui::authenticate(&Request {
+    let git_operation = matches!(
+        activity.operation,
+        Operation::GitCommit
+            | Operation::GitTag
+            | Operation::GitData
+            | Operation::Ssh {
+                git_operation: Some(_),
+                ..
+            }
+    );
+    let application = caller
+        .process
+        .iter()
+        .chain(&caller.ancestors)
+        .find(|process| {
+            git_operation
+                && process
+                    .executable
+                    .as_deref()
+                    .and_then(|p| p.rsplit('/').next())
+                    == Some("git")
+        })
+        .or(caller.process.as_ref());
+    let app_name = application
+        .and_then(|process| {
+            process.details.applications.iter().find(|app| {
+                app.executable.as_deref().is_some_and(|name| {
+                    process.executable.as_deref()
+                        == Some(format!("{}/Contents/MacOS/{name}", app.bundle_path).as_str())
+                })
+            })
+        })
+        .and_then(|app| app.name.as_deref())
+        .or_else(|| application.map(|process| process.name.as_str()))
+        .unwrap_or_else(|| {
+            caller
+                .executable
+                .rsplit('/')
+                .next()
+                .unwrap_or(&caller.executable)
+        });
+    let paths = seccy_core::storage::Paths::from_env().ok();
+    let directory = caller
+        .process
+        .iter()
+        .chain(&caller.ancestors)
+        .find_map(|p| p.details.working_directory.clone());
+    let mut refs = Vec::new();
+    if caller.process.is_none() {
+        refs.push(seccy_ui::prompt::ProcessRef {
+            pid: caller.pid,
+            label: caller
+                .executable
+                .rsplit('/')
+                .next()
+                .unwrap_or(&caller.executable)
+                .to_owned(),
+        });
+    }
+    refs.extend(caller.process.iter().chain(&caller.ancestors).map(|p| {
+        let label = match &p.details.command {
+            Some(cmd) if cmd.tool == "git" && cmd.subcommand.is_some() => format!(
+                "{} {}",
+                p.name,
+                cmd.subcommand.as_deref().unwrap_or_default()
+            ),
+            _ => p.name.clone(),
+        };
+        seccy_ui::prompt::ProcessRef { pid: p.pid, label }
+    }));
+    let request = Request {
+        presentation: seccy_ui::prompt::Prompt::new(
+            &activity.operation,
+            refs,
+            directory.as_deref(),
+            &keys.iter().map(|k| k.name.clone()).collect::<Vec<_>>(),
+        )
+        .with_origin(directory.as_deref().and_then(crate::origin::probe)),
+        ancestry_interruption: caller.ancestry_interruption.clone(),
+        diagnostics: serde_json::to_string_pretty(&serde_json::json!({
+            "peer_pid": caller.pid,
+            "peer_uid": caller.peer_uid,
+            "peer_gid": caller.peer_gid,
+            "executable": caller.executable,
+            "details": details,
+            "signing": signing.map(|(bytes, payload)| serde_json::json!({
+                "byte_count": bytes.len(),
+                "decoded": payload,
+                "raw_base64": STANDARD.encode(bytes),
+                "utf8": std::str::from_utf8(bytes).ok(),
+            })),
+        }))?,
         details: details.into(),
         content: activity.content(false),
         pid_label: seccy_macos_ui::pid_label(caller.pid),
-        key: key.into(),
-        fingerprint: fingerprint.into(),
+        key: keys
+            .iter()
+            .map(|k| k.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        fingerprint: keys
+            .iter()
+            .map(|k| k.fingerprint.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        key_info: keys
+            .iter()
+            .map(|k| seccy_macos_ui::KeyInfo {
+                name: k.name.clone(),
+                fingerprint: k.fingerprint.clone(),
+                algorithm: k.public_key.split_whitespace().next().map(str::to_owned),
+                public_key_path: paths.as_ref().map(|p| p.public_key(&k.name)),
+            })
+            .collect(),
         executable: caller.executable.clone(),
         pid: caller.pid,
+        header: activity.header(app_name),
+        app_pid: application.map_or(caller.pid, |process| process.pid),
+        working_directory: directory,
         processes: caller
             .process
             .iter()
             .chain(caller.ancestors.iter())
             .map(|process| seccy_macos_ui::Process {
+                limited: process.details.fallback_reason.is_some(),
+                diagnostics: serde_json::to_string_pretty(process)
+                    .expect("process snapshots serialize as JSON"),
                 pid: process.pid,
                 pid_label: seccy_macos_ui::pid_label(process.pid),
                 name: process.name.clone(),
@@ -379,8 +492,18 @@ fn authentication_context(
                     .collect(),
             })
             .collect(),
-    })
-    .map(Some)
+    };
+    if let Some(directory) = capture_directory
+        && let Err(error) = seccy_macos_ui::capture(&request, &directory, mode.as_str())
+    {
+        tracing::warn!(event = "capture_failed", error = %error, directory);
+        eprintln!("Seccy request capture failed: {error:#}");
+    }
+    if mode == Mode::Prompt {
+        seccy_macos_ui::authenticate(&request).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 fn as_cf_context(context: &Option<Authorization>) -> Option<CFType> {
@@ -471,10 +594,10 @@ impl KeyStore for SecureEnclave {
         let context = authentication_context(
             expected.mode,
             &details,
-            &expected.name,
-            &expected.fingerprint,
+            &[expected],
             caller,
             &activity,
+            Some((message, payload)),
         )?;
         let cf_context = as_cf_context(&context);
         let key = lookup_with_context(&expected.storage_id, expected.mode, cf_context)?
@@ -597,16 +720,41 @@ pub fn caller(stream: &UnixStream) -> Result<Caller> {
     };
     ensure!(result == 0 && pid > 0, "cannot identify socket peer PID");
     let executable = executable(pid).context("cannot resolve socket peer executable")?;
-    let process = process_info(pid);
+    let snapshot = process_info(pid);
+    let mut interruption = snapshot
+        .as_ref()
+        .err()
+        .map(|error| format!("PID {pid}: {error:#}"));
+    let process = snapshot.ok();
     let mut ancestors = Vec::new();
     let mut parent_pid = process.as_ref().map(|p| p.parent_pid).unwrap_or(0);
-    while parent_pid > 0 && parent_pid != pid && ancestors.len() < 16 {
-        if ancestors.iter().any(|p: &ProcessInfo| p.pid == parent_pid) {
+    while parent_pid > 0 {
+        if ancestors.len() == 16 {
+            interruption = Some(format!("PID {parent_pid}: 16-ancestor limit reached"));
             break;
         }
-        let Some(parent) = process_info(parent_pid) else {
+        if parent_pid == pid || ancestors.iter().any(|p: &ProcessInfo| p.pid == parent_pid) {
+            interruption = Some(format!("PID {parent_pid}: repeated parent"));
             break;
+        }
+        let parent = match process_info(parent_pid) {
+            Ok(parent) => parent,
+            Err(error) => {
+                interruption = Some(format!("PID {parent_pid}: {error:#}"));
+                break;
+            }
         };
+        if let Some(child) = ancestors.last().or(process.as_ref())
+            && (
+                parent.start_time_unix_seconds,
+                parent.start_time_microseconds,
+            ) > (child.start_time_unix_seconds, child.start_time_microseconds)
+        {
+            interruption = Some(format!(
+                "PID {parent_pid}: parent identity changed (started after child)"
+            ));
+            break;
+        }
         parent_pid = parent.parent_pid;
         ancestors.push(parent);
     }
@@ -617,6 +765,7 @@ pub fn caller(stream: &UnixStream) -> Result<Caller> {
         peer_gid: gid,
         process,
         ancestors,
+        ancestry_interruption: interruption,
     })
 }
 
@@ -631,7 +780,11 @@ fn executable(pid: i32) -> Option<String> {
     Some(String::from_utf8_lossy(&path[..end]).into_owned())
 }
 
-fn process_info(pid: i32) -> Option<ProcessInfo> {
+unsafe extern "C" {
+    fn seccy_kernel_process(pid: i32, out: *mut libc::proc_bsdinfo) -> i32;
+}
+
+fn read_process(pid: i32) -> Result<(libc::proc_bsdinfo, Option<String>)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
     // SAFETY: proc_pidinfo writes at most `size` bytes to the allocated struct.
@@ -644,10 +797,26 @@ fn process_info(pid: i32) -> Option<ProcessInfo> {
             size,
         )
     };
-    if read != size {
-        return None;
+    if read == size {
+        return Ok((unsafe { info.assume_init() }, None));
     }
-    let info = unsafe { info.assume_init() };
+    let reason = if read <= 0 {
+        std::io::Error::last_os_error().to_string()
+    } else {
+        format!("short read {read}/{size}")
+    };
+    let status = unsafe { seccy_kernel_process(pid, info.as_mut_ptr()) };
+    if status != 0 {
+        bail!(
+            "proc_pidinfo: {reason}; sysctl(KERN_PROC_PID): {}",
+            std::io::Error::from_raw_os_error(status)
+        );
+    }
+    Ok((unsafe { info.assume_init() }, Some(reason)))
+}
+
+fn process_info(pid: i32) -> Result<ProcessInfo> {
+    let (info, fallback) = read_process(pid)?;
     let name: Vec<u8> = info
         .pbi_name
         .iter()
@@ -655,29 +824,23 @@ fn process_info(pid: i32) -> Option<ProcessInfo> {
         .map(|b| *b as u8)
         .collect();
     let path = executable(pid);
-    let details = crate::process::collect(pid, path.as_deref(), info.e_tdev, info.e_tpgid);
-    // Discard enrichment if the PID was recycled while inspecting it.
-    let mut after = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    let reread = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            after.as_mut_ptr().cast(),
-            size,
-        )
-    };
-    if reread != size {
-        return None;
+    let mut details = crate::process::collect(pid, path.as_deref(), info.e_tdev, info.e_tpgid);
+    if let Some(reason) = fallback {
+        details.fallback_reason = Some(reason.clone());
+        details.source = format!("sysctl(KERN_PROC_PID) identity; {}", details.source);
+        details.notes.push(format!(
+            "Limited process snapshot: proc_pidinfo: {reason}; continued with kernel process table"
+        ));
     }
-    let after = unsafe { after.assume_init() };
+    // Discard enrichment if the PID was recycled while inspecting it.
+    let (after, _) = read_process(pid).context("rechecking process identity")?;
     if (info.pbi_start_tvsec, info.pbi_start_tvusec)
         != (after.pbi_start_tvsec, after.pbi_start_tvusec)
         || path != executable(pid)
     {
-        return None;
+        bail!("process identity changed while collecting snapshot");
     }
-    Some(ProcessInfo {
+    Ok(ProcessInfo {
         pid,
         parent_pid: info.pbi_ppid as i32,
         executable: path,
@@ -696,6 +859,21 @@ fn process_info(pid: i32) -> Option<ProcessInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_process_fallback_matches_own_process_identity() {
+        let pid = std::process::id() as i32;
+        let (full, _) = read_process(pid).unwrap();
+        let mut raw = std::mem::MaybeUninit::uninit();
+        assert_eq!(unsafe { seccy_kernel_process(pid, raw.as_mut_ptr()) }, 0);
+        let limited = unsafe { raw.assume_init() };
+        assert_eq!(limited.pbi_pid, full.pbi_pid);
+        assert_eq!(limited.pbi_ppid, full.pbi_ppid);
+        assert_eq!(limited.pbi_uid, full.pbi_uid);
+        assert_eq!(limited.pbi_gid, full.pbi_gid);
+        assert_eq!(limited.pbi_start_tvsec, full.pbi_start_tvsec);
+        assert_eq!(limited.pbi_start_tvusec, full.pbi_start_tvusec);
+    }
 
     // Ephemeral software keys exercise Apple's actual ECIES implementation without
     // creating keychain items or claiming to verify Secure Enclave/Touch ID ACLs.

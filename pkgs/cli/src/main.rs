@@ -26,6 +26,8 @@ mod selection;
 mod server;
 #[cfg(target_os = "macos")]
 mod service;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod shell;
 
 #[cfg(target_os = "linux")]
 #[path = "service_linux.rs"]
@@ -77,6 +79,8 @@ enum Commands {
     Secrets(secret_args::SecretsArgs),
     /// Print shell setup for PATH and SSH_AUTH_SOCK
     Activate(ActivateArgs),
+    /// Start a temporary Git/SSH shell with its own foreground agent
+    Shell(ShellArgs),
     /// Initialize the Linux TPM/FIDO vault
     Init(InitArgs),
     /// Install or locate the fnox plugin
@@ -132,6 +136,21 @@ enum ProviderCommand {
 struct ActivateArgs {
     /// Shell type: bash, elvish, fish, nu, xonsh, zsh, pwsh, powershell (defaults to SHELL)
     shell_type: Option<String>,
+}
+
+#[derive(Args)]
+struct ShellArgs {
+    /// Provisioned key to use for Git signing and SSH
+    name: String,
+    /// Shell executable (defaults to SHELL; bash, zsh, or fish)
+    #[usage(long)]
+    shell: Option<PathBuf>,
+    /// Run a command instead of an interactive session
+    #[usage(long)]
+    command: Option<String>,
+    /// Save macOS request snapshots for gallery replay in this directory
+    #[usage(long)]
+    capture: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -278,6 +297,11 @@ fn main() {
         seccy_macos_ui::run(cli_entry);
         return;
     }
+    #[cfg(target_os = "macos")]
+    if std::env::var("SECCY_CAPTURE_DIR").is_ok_and(|path| !path.is_empty()) {
+        seccy_macos_ui::run_capture(cli_entry);
+        return;
+    }
     cli_main();
 }
 
@@ -398,6 +422,15 @@ fn run(app: App, output: &Output) -> Result<()> {
     if let Commands::Activate(args) = &app.command {
         return activate::run(args.shell_type.as_deref(), output);
     }
+    if let Commands::Shell(args) = &app.command {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            anyhow::ensure!(!output.structured(), "shell does not support JSON output");
+            return shell::run(args);
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        anyhow::bail!("shell requires macOS or Linux");
+    }
     let mut paths = seccy_core::storage::Paths::from_env()?;
     #[cfg(target_os = "macos")]
     let global_secrets = app
@@ -483,6 +516,7 @@ fn run(app: App, output: &Output) -> Result<()> {
         Commands::Config(_) | Commands::Providers(_) => unreachable!(),
         Commands::Secrets(_) => unreachable!(),
         Commands::Activate(_) => unreachable!(),
+        Commands::Shell(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),
         Commands::Provision(_) => "provision",
@@ -537,6 +571,7 @@ fn run_platform(
         Commands::Config(_) | Commands::Providers(_) => unreachable!(),
         Commands::Secrets(_) => unreachable!(),
         Commands::Activate(_) => unreachable!(),
+        Commands::Shell(_) => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Fnox(_) => unreachable!(),
         command @ (Commands::Provision(_)

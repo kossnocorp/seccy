@@ -1,0 +1,41 @@
+{
+  "operation": "GitCommit",
+  "processes": [
+    {
+      "pid": 43061,
+      "label": "ssh-keygen"
+    },
+    {
+      "pid": 42969,
+      "label": "git commit"
+    },
+    {
+      "pid": 41810,
+      "label": "fish"
+    },
+    {
+      "pid": 41801,
+      "label": "bash"
+    },
+    {
+      "pid": 40858,
+      "label": "fish"
+    },
+    {
+      "pid": 37945,
+      "label": "Code Helper"
+    },
+    {
+      "pid": 36822,
+      "label": "Code"
+    },
+    {
+      "pid": 1,
+      "label": "launchd"
+    }
+  ],
+  "directory": "/Users/example/code/tmp/seccy-test",
+  "keys": [
+    "auth"
+  ]
+}

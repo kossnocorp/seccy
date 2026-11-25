@@ -54,6 +54,14 @@ hash = "sha256:c6c00152fffc69445f607a5b657cf8283cc93a6208e512b12dce7b9a9675eb7e"
 source = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/commit.svg"
 path = "vendor/@http/https__raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/commit.svg"
 
+[files."http:https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/data_object.svg"]
+direct = true
+version = "sha256:4b1312e373ae5561e362064fcbb11f349104061cbf7eee91cd225e3e9328cc87"
+revision = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/data_object.svg"
+hash = "sha256:4b1312e373ae5561e362064fcbb11f349104061cbf7eee91cd225e3e9328cc87"
+source = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/data_object.svg"
+path = "vendor/@http/https__raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/data_object.svg"
+
 [files."http:https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/key.svg"]
 direct = true
 version = "sha256:660ccfc916483187f7821ef6e7a1dc088ecb5352b20ab5aa3edba7fb6116effd"
@@ -61,3 +69,27 @@ revision = "https://raw.githubusercontent.com/marella/material-design-icons/refs
 hash = "sha256:660ccfc916483187f7821ef6e7a1dc088ecb5352b20ab5aa3edba7fb6116effd"
 source = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/key.svg"
 path = "vendor/@http/https__raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/key.svg"
+
+[files."http:https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/lock_open.svg"]
+direct = true
+version = "sha256:2dd4fba1808dbc69284a4413054386e63c7e097937252d5f3de424d62d637cac"
+revision = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/lock_open.svg"
+hash = "sha256:2dd4fba1808dbc69284a4413054386e63c7e097937252d5f3de424d62d637cac"
+source = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/lock_open.svg"
+path = "vendor/@http/https__raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/lock_open.svg"
+
+[files."http:https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/password.svg"]
+direct = true
+version = "sha256:8680c375bd45c671e00e1af4b9e6a92ac4dad8ef69e41ee464c408d2f9040eef"
+revision = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/password.svg"
+hash = "sha256:8680c375bd45c671e00e1af4b9e6a92ac4dad8ef69e41ee464c408d2f9040eef"
+source = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/password.svg"
+path = "vendor/@http/https__raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/password.svg"
+
+[files."http:https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/sell.svg"]
+direct = true
+version = "sha256:223631f1981f19cf8834907e7afff65a97ba9f845c934aa6343c1944a706e44b"
+revision = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/sell.svg"
+hash = "sha256:223631f1981f19cf8834907e7afff65a97ba9f845c934aa6343c1944a706e44b"
+source = "https://raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/sell.svg"
+path = "vendor/@http/https__raw.githubusercontent.com/marella/material-design-icons/refs/heads/main/svg/filled/sell.svg"

@@ -3,21 +3,43 @@ use serde::Serialize;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Request {
+    pub presentation: seccy_ui::prompt::Prompt,
+    pub diagnostics: String,
     pub details: String,
-    pub content: seccy_copy::Content,
+    pub content: seccy_ui::Content,
     #[serde(rename = "pidLabel")]
     pub pid_label: String,
     pub key: String,
     pub fingerprint: String,
+    #[serde(rename = "keyInfo")]
+    pub key_info: Vec<KeyInfo>,
     pub executable: String,
     pub pid: i32,
     pub processes: Vec<Process>,
+    #[serde(rename = "ancestryInterruption")]
+    pub ancestry_interruption: Option<String>,
+    pub header: seccy_ui::Header,
+    #[serde(rename = "appPid")]
+    pub app_pid: i32,
+    #[serde(rename = "workingDirectory")]
+    pub working_directory: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyInfo {
+    pub name: String,
+    pub fingerprint: String,
+    pub algorithm: Option<String>,
+    pub public_key_path: Option<std::path::PathBuf>,
 }
 
 /// Presentation-only snapshots, requester first, then nearest parent first.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Process {
+    pub limited: bool,
+    pub diagnostics: String,
     pub pid: i32,
     pub pid_label: String,
     pub name: String,
@@ -28,7 +50,7 @@ pub struct Process {
 }
 
 pub fn pid_label(pid: i32) -> String {
-    seccy_copy::text("ui-pid", &[("pid", &pid.to_string())])
+    seccy_ui::text("ui-pid", &[("pid", &pid.to_string())])
 }
 
 #[cfg(target_os = "macos")]
@@ -47,12 +69,17 @@ mod native {
     };
 
     static AUTHORIZATION: Mutex<()> = Mutex::new(());
-    static RUNNING: AtomicBool = AtomicBool::new(false);
+    static CUSTOM_UI: AtomicBool = AtomicBool::new(false);
     unsafe extern "C" {
         fn seccy_notifications_configure();
         fn seccy_notify(title: *const c_char, body: *const c_char) -> i32;
         fn seccy_ui_run(entry: extern "C" fn());
         fn seccy_ui_authenticate(request: *const c_char) -> *mut c_void;
+        fn seccy_ui_capture(
+            request: *const c_char,
+            directory: *const c_char,
+            mode: *const c_char,
+        ) -> i32;
     }
 
     /// Install the native notification delegate without requesting permission.
@@ -81,8 +108,25 @@ mod native {
 
     /// Run on the process main thread. The entry point runs on a worker and must exit.
     pub fn run(entry: extern "C" fn()) {
-        RUNNING.store(true, Ordering::Release);
+        CUSTOM_UI.store(true, Ordering::Release);
+        run_capture(entry);
+    }
+
+    /// Keep AppKit available for icon snapshots without changing system prompts.
+    pub fn run_capture(entry: extern "C" fn()) {
         unsafe { seccy_ui_run(entry) };
+    }
+
+    /// Snapshot presentation and resolved icons before the key operation.
+    pub fn capture(request: &Request, directory: &str, mode: &str) -> Result<()> {
+        let request = CString::new(serde_json::to_string(request)?)?;
+        let directory = CString::new(directory)?;
+        let mode = CString::new(mode)?;
+        anyhow::ensure!(
+            unsafe { seccy_ui_capture(request.as_ptr(), directory.as_ptr(), mode.as_ptr()) } == 0,
+            "could not save request capture"
+        );
+        Ok(())
     }
 
     /// A fresh context bound to one operation or explicit batch; never cached.
@@ -103,14 +147,13 @@ mod native {
     }
 
     pub fn authenticate(request: &Request) -> Result<Authorization> {
-        if !RUNNING.load(Ordering::Acquire) {
+        if !CUSTOM_UI.load(Ordering::Acquire) {
             // Preserve the original system prompt and its exact plain-text reason.
             // Security.framework starts authentication during the key operation.
             let context = unsafe { LAContext::new() };
             unsafe {
                 context.setLocalizedReason(&NSString::from_str(&request.details));
                 context.setTouchIDAuthenticationAllowableReuseDuration(0.0);
-                context.setLocalizedFallbackTitle(Some(&NSString::from_str("")));
             }
             return Ok(Authorization(context, None));
         }
@@ -139,14 +182,33 @@ mod native {
         fn default_context_preserves_original_system_prompt_reason() {
             let details = "Approve the git commit?\n\nThe process chain Terminal → git commit wants to use the work key to sign a Git commit.";
             let authorization = authenticate(&Request {
+                presentation: seccy_ui::prompt::Prompt::new(
+                    &seccy_ui::Operation::GitCommit,
+                    vec![],
+                    None,
+                    &["work".into()],
+                ),
+                diagnostics: "{}".into(),
                 details: details.into(),
-                content: seccy_copy::Content::default(),
+                content: seccy_ui::Content::default(),
                 pid_label: crate::pid_label(123),
                 key: "work".into(),
                 fingerprint: "sample".into(),
+                key_info: vec![],
                 executable: "/usr/bin/git".into(),
                 pid: 123,
                 processes: vec![],
+                ancestry_interruption: None,
+                header: seccy_ui::Activity {
+                    operation: seccy_ui::Operation::GitCommit,
+                    key: "work".into(),
+                    chain: "git".into(),
+                    directory: None,
+                    warnings: vec![],
+                }
+                .header("git"),
+                app_pid: 123,
+                working_directory: None,
             })
             .unwrap();
             unsafe {
@@ -160,14 +222,7 @@ mod native {
                         .touchIDAuthenticationAllowableReuseDuration(),
                     0.0
                 );
-                assert_eq!(
-                    authorization
-                        .context()
-                        .localizedFallbackTitle()
-                        .unwrap()
-                        .to_string(),
-                    ""
-                );
+                assert!(authorization.context().localizedFallbackTitle().is_none());
             }
         }
     }

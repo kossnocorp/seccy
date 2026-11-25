@@ -24,7 +24,7 @@ jobs:
       - run: cargo test --workspace --doc --locked
       - name: Build SwiftUI gallery and test authorization lifecycle
         if: runner.os == 'macOS'
-        run: mise run macos:ui:check
+        run: mise run :macos/ui:check
       - run: lua pkgs/fnox/test.lua
       - if: runner.os == 'Linux'
         run: mise run linux:sign:test

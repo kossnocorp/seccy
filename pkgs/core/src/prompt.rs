@@ -81,12 +81,18 @@ impl Caller {
     }
 
     pub(crate) fn git_operation(&self, allowed: &[&str]) -> Option<String> {
-        self.process.iter().chain(&self.ancestors).find_map(|p| {
-            let command = p.details.command.as_ref()?;
-            let subcommand = command.subcommand.as_deref()?;
-            (command.tool == "git" && allowed.contains(&subcommand))
-                .then(|| format!("git {subcommand}"))
-        })
+        // Snapshots are requester-first. Walk from the root to attribute a
+        // nested command (e.g. pull → fetch → ssh) to the initiating Git verb.
+        self.process
+            .iter()
+            .chain(&self.ancestors)
+            .rev()
+            .find_map(|p| {
+                let command = p.details.command.as_ref()?;
+                let subcommand = command.subcommand.as_deref()?;
+                (command.tool == "git" && allowed.contains(&subcommand))
+                    .then(|| format!("git {subcommand}"))
+            })
     }
 
     pub(crate) fn request(&self, heading: &str, key: &str, purpose: &str, mode: Mode) -> String {

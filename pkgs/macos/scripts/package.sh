@@ -3,22 +3,27 @@
 set -euo pipefail
 
 : "${SECCY_SIGNING_IDENTITY:?SECCY_SIGNING_IDENTITY must be set}"
-: "${SECCY_PROFILE:?SECCY_PROFILE must be set}"
-
-profile_path=$SECCY_PROFILE
-if [[ $profile_path == '~/'* ]]; then
-    profile_path="$HOME/${profile_path:2}"
-fi
 bundle_id=${SECCY_BUNDLE_ID-fyi.seccy.cli}
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 
+umask 077
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/seccy-package.XXXXXX")
 trap 'rm -rf "$temporary"' EXIT
+if [[ -n ${SECCY_PROFILE:-} ]]; then
+	profile_path=$SECCY_PROFILE
+	if [[ $profile_path == '~/'* ]]; then
+		profile_path="$HOME/${profile_path:2}"
+	fi
+else
+	: "${SECCY_PROFILE_BASE64:?Set SECCY_PROFILE to a file or provide SECCY_PROFILE_BASE64 (for example through fnox exec)}"
+	profile_path="$temporary/seccy.provisionprofile"
+	printf '%s' "$SECCY_PROFILE_BASE64" | base64 --decode >"$profile_path"
+fi
 profile="$temporary/profile.plist"
-security cms -D -i "$profile_path" > "$profile"
+security cms -D -i "$profile_path" >"$profile"
 
 read_profile() {
-    /usr/libexec/PlistBuddy -c "Print :$1" "$profile"
+	/usr/libexec/PlistBuddy -c "Print :$1" "$profile"
 }
 
 team=$(read_profile 'Entitlements:com.apple.developer.team-identifier')
@@ -31,22 +36,22 @@ permitted=$(read_profile 'Entitlements:com.apple.application-identifier')
 
 # Unquoted right-hand operands intentionally match profile wildcard patterns.
 if [[ $app_id != $permitted ]]; then
-    printf 'Profile does not authorize %s\n' "$app_id" >&2
-    exit 1
+	printf 'Profile does not authorize %s\n' "$app_id" >&2
+	exit 1
 fi
 
 authorized=false
 index=0
 while group=$(read_profile "Entitlements:keychain-access-groups:$index" 2>/dev/null); do
-    if [[ $app_id == $group ]]; then
-        authorized=true
-        break
-    fi
-    index=$((index + 1))
+	if [[ $app_id == $group ]]; then
+		authorized=true
+		break
+	fi
+	index=$((index + 1))
 done
 if [[ $authorized != true ]]; then
-    printf 'Profile does not authorize keychain group %s\n' "$app_id" >&2
-    exit 1
+	printf 'Profile does not authorize keychain group %s\n' "$app_id" >&2
+	exit 1
 fi
 
 bundle="$root/target/Seccy.app"
@@ -69,6 +74,7 @@ plutil -insert CFBundleIdentifier -string "$bundle_id" "$info"
 plutil -insert CFBundleName -string Seccy "$info"
 plutil -insert CFBundleExecutable -string seccy "$info"
 plutil -insert CFBundleIconFile -string Seccy.icns "$info"
+plutil -insert CFBundleIconName -string Seccy "$info"
 plutil -insert CFBundlePackageType -string APPL "$info"
 version=$(cd "$root" && cargo metadata --no-deps --format-version 1 --locked | jaq -r '.packages[] | select(.name == "seccy_cli") | .version')
 plutil -insert CFBundleVersion -string "$version" "$info"
@@ -84,6 +90,6 @@ plutil -insert keychain-access-groups -xml '<array/>' "$entitlements"
 plutil -insert keychain-access-groups.0 -string "$app_id" "$entitlements"
 
 codesign --force --sign "$SECCY_SIGNING_IDENTITY" \
-    --timestamp --options runtime --entitlements "$entitlements" "$bundle"
+	--timestamp --options runtime --entitlements "$entitlements" "$bundle"
 codesign --verify --strict "$bundle"
 printf '%s\n' "$binaries/seccy"

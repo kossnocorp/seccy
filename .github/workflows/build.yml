@@ -36,7 +36,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       SECCY_SIGNING_IDENTITY: ${{ vars.SECCY_SIGNING_IDENTITY }}
-      SECCY_BUNDLE_ID: ${{ vars.SECCY_BUNDLE_ID || 'fyi.seccy.cli' }}
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup

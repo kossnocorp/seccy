@@ -5,6 +5,25 @@ SwiftUI presentation with a small C ABI bridge to the Rust agent. Requires macOS
 
 ## Enable the experimental prompt
 
+The prompt header shows the nearest bundled application in the observed process
+chain, the Git action, and the hosting provider. GitHub, GitLab, and Bitbucket
+public SSH hosts (including their alternate SSH endpoints) are matched exactly;
+explicit SSH `-o HostName` overrides are supported. Unresolved SSH config aliases
+and self-hosted domains use the generic Git icon. These icons describe observed
+context, not verified server identity; host-key warnings remain visible.
+
+Artwork is embedded from the SVGs pinned by `vendor.toml` / `vendor.lock.toml`
+through the shared Swift projection, so packaged prompts do not fetch icons or
+depend on the source checkout. The gallery includes provider-specific scenarios.
+Gallery controls include separate action/hosting selectors, an editable key name,
+and an editable directory with a native folder picker. Action, hosting, key,
+directory, appearance, simulated state, and live Touch ID preference persist in
+the gallery's UserDefaults across launches. Only preferences are restored, never
+an authentication context or approval.
+
+The working-directory row abbreviates only the current user's home path. Touch
+ID uses the existing stable native control, scaled down beside the footer label.
+
 The default remains Apple's built-in authentication window and the original
 plain-text reason. To opt in, add this to `~/.config/seccy/config.toml` (or the
 corresponding `$XDG_CONFIG_HOME/seccy/config.toml`), then restart the agent:
@@ -20,8 +39,9 @@ does not change it.
 
 ## Development
 
-- `mise run macos:ui`: build and run the gallery in the foreground, with live JSON event logs on stdout. Quit any older gallery first; Ctrl+C stops this process.
-- `mise run macos:ui:check`: build the gallery and run Swift tests.
+- `mise run macos/ui`: build and run the gallery in the foreground, with live JSON event logs on stdout. Quit any older gallery first; Ctrl+C stops this process.
+- `mise run :macos/ui:watch`: build and run, then rebuild and restart automatically after relevant changes.
+- `mise run :macos/ui:check`: build the gallery and run Swift tests.
 - Open `SeccyUI.xcodeproj`, choose **Gallery**, and Run. The gallery uses ad-hoc bundle signing;
   no Developer ID profile is needed. `AuthorizationView_Previews` also opens in Canvas.
 - The **SeccyUI** scheme builds the static UI library independently.
@@ -33,6 +53,8 @@ The gallery opens two windows: **Seccy Preview Controls** and the standalone
 size, title bar, and SwiftUI content as production, without a preview badge.
 Settings update that window live; **Show prompt** reopens it after cancellation.
 Both app bundles use `assets/icon-macos.png` through the shared icon build script.
+The script produces both `Seccy.icns` and a compiled `Assets.car` app-icon catalog;
+`CFBundleIconName=Seccy` lets Notification Center resolve the catalog icon.
 
 **Send test notification** submits sample text through the same
 native UserNotifications service as production. The sender uses the bundle's
@@ -63,14 +85,25 @@ For automatic updates while editing SwiftUI, open `SeccyUI.xcodeproj`, select
 `AuthorizationView_Previews` preview. Canvas updates the view as its code changes;
 it previews the prompt content, not the separate controls/window lifecycle.
 
-`mise run macos:ui` runs a compiled standalone app. It does not watch source files
-or hot-reload code: stop it with Ctrl+C and rerun the task to rebuild and restart.
-Use the gallery for live Touch ID, window behavior, notifications and stdout logs.
+`mise run :macos/ui:watch` uses watchexec to rebuild and restart the standalone app.
+Run these commands from the repository root. Mise's monorepo mode requires the
+leading `:` for task names containing both `/` and `:`; from a package directory,
+use the root-qualified `mise run //:macos/ui:watch`.
+It watches Swift sources, Fluent translations and their Rust generator, shared
+Rust core/macOS code, Xcode configuration, Cargo/mise configuration, and vendored
+icons and app assets. Generated Swift copy, build output, and Xcode user state are
+excluded to prevent restart loops. Changes are debounced for 500 ms; the previous
+process tree is stopped before rebuilding. Build failures leave the watcher
+running so the next edit retries. Ctrl+C stops the watcher and its app.
+Gallery preferences persist across restarts.
+
+`mise run macos/ui` remains the one-shot build/run command. Use the gallery for
+live Touch ID, window behavior, notifications and stdout logs.
 
 ## Diagnose rendering / authentication events
 
 ```sh
-mise run macos:ui | tee target/gallery-events.jsonl
+mise run macos/ui | tee target/gallery-events.jsonl
 ```
 
 Each line has a timestamp, elapsed milliseconds, PID, thread, event name and
@@ -174,15 +207,15 @@ Critical alerts require Apple's special entitlement and user permission.
 ## Shared copy
 
 Experimental prompt and notification wording lives in
-[`../copy/locales/en-US/seccy.ftl`](../copy/locales/en-US/seccy.ftl), formatted by
+[`../ui/locales/en-US/seccy.ftl`](../ui/locales/en-US/seccy.ftl), formatted by
 Rust's Fluent implementation. The legacy builtin prompt copy remains unchanged.
 The gallery's labels, requests, and notification examples are generated from the
 same catalog and presenter. Xcode and Cargo builds regenerate the copy; for
 standalone Swift tests or Canvas after editing the catalog, run:
 
 ```sh
-cargo run -p seccy_copy --example generate-swift
+cargo run -p seccy_ui --example generate-swift
 ```
 
-See [`../copy/README.md`](../copy/README.md) for the shared-copy boundary. English
+See [`../ui/README.md`](../ui/README.md) for the prompt model and shared-copy boundary. English
 is the only locale currently bundled.

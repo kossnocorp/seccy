@@ -1,6 +1,6 @@
 //! Semantic inputs for the Fluent presenter. Legacy descriptions remain separate.
 use crate::{Caller, payload::Payload};
-pub use seccy_copy::{Activity, Operation, Warning};
+pub use seccy_ui::{Activity, Operation, Warning};
 
 impl Caller {
     pub fn activity(&self, key: &str, operation: Operation) -> Activity {
@@ -33,15 +33,18 @@ impl Caller {
                     .as_ref()
                     .and_then(|p| p.details.command.as_ref())
                     .filter(|c| c.tool == "ssh");
-                let host =
-                    command
-                        .and_then(|c| c.destination_argument.as_ref())
-                        .map(|destination| {
-                            destination
-                                .rsplit_once('@')
-                                .map_or(destination.as_str(), |(_, host)| host)
-                                .into()
-                        });
+                let host = command
+                    .and_then(|c| {
+                        c.hostname_override
+                            .as_ref()
+                            .or(c.destination_argument.as_ref())
+                    })
+                    .map(|destination| {
+                        destination
+                            .rsplit_once('@')
+                            .map_or(destination.as_str(), |(_, host)| host)
+                            .into()
+                    });
                 Operation::Ssh {
                     username: username.clone(),
                     host,

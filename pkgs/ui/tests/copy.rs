@@ -1,4 +1,4 @@
-use seccy_copy::{Activity, Operation, Warning};
+use seccy_ui::{Activity, Operation, Warning};
 
 fn activity(operation: Operation) -> Activity {
     Activity {
@@ -112,7 +112,7 @@ fn values_are_literal_and_controls_cannot_spoof_another_line() {
     assert!(!content.body.contains('\n'));
     assert!(!content.body.contains('\u{202e}'));
     assert!(content.body.contains("**TOKEN** {$key}"));
-    assert_eq!(seccy_copy::display(&"a".repeat(200)).chars().count(), 161);
+    assert_eq!(seccy_ui::display(&"a".repeat(200)).chars().count(), 161);
 }
 
 #[test]
@@ -123,7 +123,54 @@ fn checked_in_swift_projection_matches_the_catalog() {
             "/../macos-ui/Sources/Copy.generated.swift"
         ))
         .unwrap(),
-        seccy_copy::swift_source(),
-        "Regenerate with cargo run -p seccy_copy --example generate-swift"
+        seccy_ui::swift_source(),
+        "Regenerate with cargo run -p seccy_ui --example generate-swift"
     );
+}
+
+#[test]
+fn provider_matching_is_exact_and_actions_remain_semantic() {
+    for (host, provider) in [
+        ("github.com", "github"),
+        ("SSH.GITHUB.COM.", "github"),
+        ("gitlab.com", "gitlab"),
+        ("altssh.gitlab.com", "gitlab"),
+        ("bitbucket.org", "bitbucket"),
+        ("altssh.bitbucket.org", "bitbucket"),
+        ("github.com.evil.example", "git"),
+        ("my-github-alias", "git"),
+        ("git.company.example", "git"),
+    ] {
+        assert_eq!(seccy_ui::hosting_provider(host), provider);
+        for (operation, action) in [
+            ("push", "cloud_upload"),
+            ("pull", "cloud_download"),
+            ("fetch", "cloud_download"),
+            ("clone", "cloud_download"),
+            ("ls-remote", "cloud_download"),
+        ] {
+            let header = activity(Operation::Ssh {
+                username: "git".into(),
+                host: Some(host.into()),
+                port: None,
+                git_operation: Some(format!("git {operation}")),
+            })
+            .header("Terminal");
+            assert_eq!(header.target, provider);
+            assert_eq!(header.action, action);
+            assert!(header.title.starts_with("Authorize Git "));
+        }
+    }
+    let header = activity(Operation::GitCommit).header("**App**\u{1}\n");
+    assert_eq!(header.target, "git");
+    assert_eq!(header.action, "commit");
+    assert_eq!(
+        header
+            .permission
+            .iter()
+            .filter(|part| part.kind == "app")
+            .count(),
+        1
+    );
+    assert_eq!(header.permission[1].value, "**App**\\u{1}\\n");
 }

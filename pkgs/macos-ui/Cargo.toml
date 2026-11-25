@@ -6,7 +6,7 @@ license.workspace = true
 build = "build.rs"
 
 [dependencies]
-seccy_copy.workspace = true
+seccy_ui.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -17,4 +17,4 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-local-authentication = { version = "0.3", default-features = false, features = ["std", "LAContext"] }
 
 [build-dependencies]
-seccy_copy.workspace = true
+seccy_ui.workspace = true

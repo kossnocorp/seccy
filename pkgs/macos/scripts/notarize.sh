@@ -43,4 +43,4 @@ spctl --assess --type execute --verbose=2 "$bundle"
 
 ditto -c -k --keepParent "$bundle" "$temporary/Seccy-notarized.zip"
 mv -f "$temporary/Seccy-notarized.zip" "$archive"
-printf '\nSend this archive to your other Mac: %s\n' "$archive"
+printf '\nNotarized archive: %s\n' "$archive"

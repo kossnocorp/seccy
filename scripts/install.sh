@@ -3,18 +3,22 @@
 set -euo pipefail
 usage() {
     cat <<'EOF'
-Usage: install.sh [--version cli@X.Y.Z] [--archive PATH]
+Usage: install.sh [--version cli@X.Y.Z] [--archive PATH] [--force] [--no-integrate]
 Installs or updates Seccy and its fnox provider.
 --archive PATH   Use a local archive (verify its provenance before running).
+--force          Replace even when the installed version number matches.
+--no-integrate   Skip service refresh and fnox initialization/linking.
 SECCY_REPOSITORY defaults to kossnocorp/seccy; XDG_BIN_HOME defaults to ~/.local/bin.
 EOF
 }
 # Parse the complete installer before running it when stdin contains the script.
 main() {
-archive= version=
+archive= version= force=false integrate=true
 while (($#)); do
     case $1 in
         --archive|--version) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; option=$1; shift; if [[ $option == --archive ]]; then archive=$1; else version=$1; fi ;;
+        --force) force=true ;;
+        --no-integrate) integrate=false ;;
         -h|--help) usage; exit ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -41,7 +45,7 @@ refresh_macos_service() {
     # A bundle replacement does not restart launchd's existing process. Reuse
     # service install to enable/restart it, or bootstrap an unloaded definition.
     # Leave first-time service setup to the user.
-    if [[ $os == Darwin && -f $HOME/Library/LaunchAgents/fyi.seccy.agent.plist ]]; then
+    if [[ $integrate == true && $os == Darwin && -f $HOME/Library/LaunchAgents/fyi.seccy.agent.plist ]]; then
         if ! "$executable" service install; then
             echo 'Seccy is installed, but refreshing its service failed. Run seccy service install to retry.' >&2
             return 1
@@ -49,7 +53,7 @@ refresh_macos_service() {
     fi
 }
 skip_if_installed() {
-    if [[ -n $1 && $installed_version == "seccy ${1#cli@}" ]]; then
+    if [[ $force == false && -n $1 && $installed_version == "seccy ${1#cli@}" ]]; then
         refresh_macos_service
         echo "Seccy ${1#cli@} is already installed."
         echo 'https://seccy.fyi/install'
@@ -125,9 +129,11 @@ else
 fi
 refresh_macos_service
 export PATH="$bin:$PATH"
-"$executable" fnox init
-if command -v fnox >/dev/null; then
-    fnox plugin link --force seccy "$("$executable" fnox info --jq-raw .plugin_dir)"
+if [[ $integrate == true ]]; then
+    "$executable" fnox init
+    if command -v fnox >/dev/null; then
+        fnox plugin link --force seccy "$("$executable" fnox info --jq-raw .plugin_dir)"
+    fi
 fi
 echo 'https://seccy.fyi/install'
 }

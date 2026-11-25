@@ -86,6 +86,18 @@ pub fn interpret(executable: &str, args: &[String], cwd: Option<&str>) -> Option
                     if option == 'p' {
                         result.port_argument = Some(value.into());
                     }
+                    if option == 'o' && result.hostname_override.is_none() {
+                        let value = value.trim();
+                        if let Some((key, host)) = value
+                            .split_once('=')
+                            .or_else(|| value.split_once(char::is_whitespace))
+                        {
+                            let host = host.trim();
+                            if key.trim().eq_ignore_ascii_case("hostname") && !host.is_empty() {
+                                result.hostname_override = Some(host.into());
+                            }
+                        }
+                    }
                     break;
                 } else if !"46AaCfGgKkMNnqsTtVvXxYy".contains(option) {
                     recognized = false;

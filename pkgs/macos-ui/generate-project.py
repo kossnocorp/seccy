@@ -34,13 +34,14 @@ for name, kind, paths, product_path, product_type in [
     copy_phase = add(name + " copy", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
         files=[], inputPaths=[], outputPaths=[], alwaysOutOfDate=1,
         runOnlyForDeploymentPostprocessing=0, shellPath="/bin/bash",
-        shellScript='export PATH="$HOME/.cargo/bin:$PATH"\ncd "$SRCROOT/../.."\ncargo run --quiet -p seccy_copy --example generate-swift',
+        shellScript='export PATH="$HOME/.cargo/bin:$PATH"\ncd "$SRCROOT/../.."\ncargo run --quiet -p seccy_ui --example generate-swift',
         name="Generate shared Fluent copy")
     phases = [copy_phase, phase]
     if name == "Gallery":
         phases.append(add("Gallery icon", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
             files=[], inputPaths=["$(SRCROOT)/../../assets/icon-macos.png", "$(SRCROOT)/../macos/scripts/build-icon.sh"],
-            outputPaths=["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Seccy.icns"],
+            outputPaths=["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Seccy.icns",
+                         "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Assets.car"],
             runOnlyForDeploymentPostprocessing=0, shellPath="/bin/bash",
             shellScript='bash "$SRCROOT/../macos/scripts/build-icon.sh" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Seccy.icns"',
             name="Build Seccy app icon"))

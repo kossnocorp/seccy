@@ -159,5 +159,6 @@ pub fn caller(stream: &UnixStream) -> Result<Caller> {
         peer_gid: credentials.gid,
         process: Some(info),
         ancestors,
+        ancestry_interruption: None,
     })
 }

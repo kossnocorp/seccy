@@ -21,6 +21,7 @@ node = "24"
 pnpm = "latest"
 "cargo:cargo-nextest" = "latest"
 "cargo:cargo-release" = "1.1.6"
+watchexec = "latest"
 sccache = "latest"
 gh = "latest"
 jaq = "latest"
@@ -57,14 +58,25 @@ run = "cargo build --release --workspace"
 run = "cargo run -p seccy_cli --"
 
 [tasks.package]
-description = "Package and sign the CLI for macOS keychain access (requires SECCY_SIGNING_IDENTITY and SECCY_PROFILE)"
+description = "Package and sign the CLI (loads missing signing identity and provisioning profile from fnox)"
 depends = ["release"]
-run = "bash pkgs/macos/scripts/package.sh"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+secrets=()
+[[ -n ${SECCY_SIGNING_IDENTITY:-} ]] || secrets+=(--only SECCY_SIGNING_IDENTITY)
+[[ -n ${SECCY_PROFILE:-} || -n ${SECCY_PROFILE_BASE64:-} ]] || secrets+=(--only SECCY_PROFILE_BASE64)
+if [[ -z ${secrets[*]:-} ]]; then
+  exec bash pkgs/macos/scripts/package.sh
+fi
+exec fnox exec "${secrets[@]}" --if-missing error -- bash pkgs/macos/scripts/package.sh
+'''
 
 [tasks."package:check"]
 description = "Check the Bash packaging and notarization scripts"
 run = [
   "bash -n scripts/install.sh",
+  "bash -n pkgs/cli/src/shell-session.sh",
   "bash -n scripts/build.sh",
   "bash -n scripts/macos-ci.sh",
   "bash -n pkgs/macos/scripts/package.sh",
@@ -101,25 +113,63 @@ description = "Verify the native TPM backend against an isolated swtpm instance"
 run = "bash pkgs/linux/scripts/test-tpm.sh"
 
 [tasks."notarize:setup"]
-description = "Store Apple notarization credentials in Keychain (SECCY_APPLE_PASSWORD or interactive prompt)"
+description = "Store Apple notarization credentials in Keychain (loads missing credentials from fnox)"
 raw = true
-run = "bash pkgs/macos/scripts/notarize-setup.sh"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+secrets=()
+for key in SECCY_APPLE_ID SECCY_TEAM_ID SECCY_NOTARY_PROFILE SECCY_APPLE_PASSWORD; do
+  [[ -n ${!key:-} ]] || secrets+=(--only "$key")
+done
+if [[ -z ${secrets[*]:-} ]]; then
+  exec bash pkgs/macos/scripts/notarize-setup.sh
+fi
+exec fnox exec "${secrets[@]}" --if-missing error -- bash pkgs/macos/scripts/notarize-setup.sh
+'''
 
 [tasks.notarize]
 description = "Build, sign, notarize and create target/Seccy-notarized.zip"
 depends = ["package"]
-run = "bash pkgs/macos/scripts/notarize.sh"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n ${SECCY_NOTARY_PROFILE:-} ]]; then
+  exec bash pkgs/macos/scripts/notarize.sh
+fi
+exec fnox exec --only SECCY_NOTARY_PROFILE --if-missing error -- bash pkgs/macos/scripts/notarize.sh
+'''
 
 [tasks.install]
 run = "pnpm install --frozen-lockfile"
 
 [tasks."build:archive"]
 description = "Build a distributable archive; macOS signs and notarizes"
-run = "bash scripts/build.sh"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $(uname -s) != Darwin ]]; then
+  exec bash scripts/build.sh "$@"
+fi
+secrets=()
+for key in SECCY_SIGNING_IDENTITY SECCY_NOTARY_PROFILE; do
+  [[ -n ${!key:-} ]] || secrets+=(--only "$key")
+done
+[[ -n ${SECCY_PROFILE:-} || -n ${SECCY_PROFILE_BASE64:-} ]] || secrets+=(--only SECCY_PROFILE_BASE64)
+if [[ -z ${secrets[*]:-} ]]; then
+  exec bash scripts/build.sh "$@"
+fi
+exec fnox exec "${secrets[@]}" --if-missing error -- bash scripts/build.sh "$@"
+'''
 
 [tasks."setup:archive"]
 description = "Install a release archive and configure seccy (pass --archive PATH)"
 run = "bash scripts/install.sh"
+
+[tasks."macos/install-source"]
+description = "Build, sign, notarize, and replace the installed app without service/fnox integration"
+depends = ["notarize"]
+run = "bash scripts/install.sh --archive target/Seccy-notarized.zip --force --no-integrate"
 
 [tasks.changelog]
 run = "git-cliff --config cliff.toml --offline --latest --strip all"
@@ -241,16 +291,30 @@ git push
 git push --tags
 '''
 
-[tasks."macos:ui:build"]
+[tasks."macos/ui:build"]
 description = "Build the SwiftUI gallery (no signing credentials required)"
 run = "xcodebuild -quiet -project pkgs/macos-ui/SeccyUI.xcodeproj -scheme Gallery -configuration Debug -destination 'platform=macOS' -derivedDataPath target/xcode CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build"
 
-[tasks."macos:ui"]
+[tasks."macos/ui"]
 description = "Run the SwiftUI gallery in the foreground with event logs on stdout"
-depends = ["macos:ui:build"]
+depends = ["//:macos/ui:build"]
+raw = true
 run = "exec 'target/xcode/Build/Products/Debug/Seccy UI Gallery.app/Contents/MacOS/Seccy UI Gallery'"
 
-[tasks."macos:ui:check"]
+[tasks."macos/ui:check"]
 description = "Build the gallery and test UI request/lifecycle invariants"
-depends = ["macos:ui:build"]
+depends = ["//:macos/ui:build"]
 run = "swift test --package-path pkgs/macos-ui --scratch-path target/swift-tests"
+
+[tasks."macos/ui:watch"]
+description = "Rebuild and restart the gallery when Swift, Fluent, shared Rust, or assets change"
+raw = true
+run = '''
+exec watchexec --restart --debounce 500ms --stop-timeout 5s --shell=none \
+  --watch pkgs/macos-ui --watch pkgs/ui --watch pkgs/core --watch pkgs/macos \
+  --watch vendor --watch assets --watch .cargo --watch-non-recursive . \
+  --filter '**/*.{swift,rs,ftl,toml,lock,pbxproj,xcscheme,plist,xcconfig,svg,png,icns,sh,py}' \
+  --ignore '**/Copy.generated.swift' --ignore '**/xcuserdata/**' \
+  --ignore '**/.build/**' --ignore '/target/**' \
+  -- mise run //:macos/ui
+'''

@@ -151,6 +151,9 @@ pub struct Caller {
     pub process: Option<ProcessInfo>,
     /// Best-effort OS snapshots, nearest parent first; not authenticated origins.
     pub ancestors: Vec<ProcessInfo>,
+    /// Present when the observed ancestry ends before the root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ancestry_interruption: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -171,6 +174,8 @@ pub struct ProcessInfo {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ProcessDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
     pub observed_at_unix_ms: u128,
     pub collection_duration_ms: u128,
     pub source: String,
@@ -179,7 +184,7 @@ pub struct ProcessDetails {
     pub terminal_foreground_group: Option<u32>,
     pub applications: Vec<ApplicationInfo>,
     pub signing: Option<CodeSigningInfo>,
-    /// Included only when debug logging is enabled. Never includes environment.
+    /// Best-effort argv snapshot. Never includes environment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<String>>,
     pub command: Option<CommandInfo>,
@@ -220,6 +225,7 @@ pub struct CommandInfo {
     pub tool: String,
     pub subcommand: Option<String>,
     pub destination_argument: Option<String>,
+    pub hostname_override: Option<String>,
     pub username_argument: Option<String>,
     pub port_argument: Option<String>,
     pub effective_directory_candidate: Option<String>,

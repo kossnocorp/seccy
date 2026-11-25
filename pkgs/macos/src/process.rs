@@ -69,9 +69,7 @@ pub fn collect(
                 &args,
                 details.working_directory.as_deref(),
             );
-            if tracing::enabled!(tracing::Level::DEBUG) {
-                details.arguments = Some(args);
-            }
+            details.arguments = Some(args);
         }
         Err(error) => details.notes.push(format!("arguments: {error:#}")),
     }
@@ -423,6 +421,8 @@ mod tests {
         );
         let args = arguments(pid).unwrap();
         assert!(!args.is_empty());
+        let details = collect(pid, None, u32::MAX, 0);
+        assert_eq!(details.arguments.as_ref(), Some(&args));
         let signature = signing(pid).unwrap();
         assert!(signature.identifier.is_some());
         assert_eq!(signature.validation_status, 0);

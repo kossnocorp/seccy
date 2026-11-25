@@ -19,3 +19,6 @@ seccy.wt.code-workspace
 # Swift / Xcode
 pkgs/macos-ui/.build/
 **/xcuserdata/
+
+# Temp
+/tmp/

@@ -98,12 +98,142 @@ Requires macOS 12 or later, Xcode to build from source, an Apple Silicon or Secu
 
 The data-protection keychain requires a code-signing identity and a provisioning profile authorizing the app identifier and keychain group. A plain `cargo build` is sufficient for tests and commands with an empty config, but is not a deployment build for keychain operations. See [Apple TN3137](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
 
+### Source-installed development shell
+
+With `SECCY_SIGNING_IDENTITY`, `SECCY_PROFILE`, and `SECCY_NOTARY_PROFILE` configured:
+
+```sh
+mise run macos/install-source
+~/.local/bin/seccy shell work
+```
+
+Instead of keeping a profile path configured, store the binary profile as an
+encrypted Base64 secret in the repository's existing fnox age provider:
+
+```sh
+base64 < /path/to/seccy.provisionprofile | fnox set SECCY_PROFILE_BASE64 --provider age
+printf '%s' 'Developer ID Application: Your Name (TEAMID)' | fnox set SECCY_SIGNING_IDENTITY --provider age
+mise run macos/install-source
+```
+
+The `package` and macOS `build:archive` tasks load missing `SECCY_SIGNING_IDENTITY`
+and `SECCY_PROFILE_BASE64` values through targeted `fnox exec --only` selections.
+An existing `SECCY_PROFILE` file also satisfies the profile requirement.
+`notarize` and `macos/install-source` inherit this through the `package` dependency.
+CI-provided variables take precedence and do not require fnox decryption.
+
+`notarize:setup` similarly loads missing `SECCY_APPLE_ID`, `SECCY_TEAM_ID`,
+`SECCY_NOTARY_PROFILE`, and `SECCY_APPLE_PASSWORD`. Run it once per machine (or
+after rotating credentials) to populate the Keychain:
+
+```sh
+mise run notarize:setup
+mise run macos/install-source
+```
+
+`notarize` and macOS `build:archive` load `SECCY_NOTARY_PROFILE` as needed and use
+the credentials stored under that name. They do not need the Apple password in
+their environment.
+
+Packaging accepts either `SECCY_PROFILE` (preferred when both are set) or
+`SECCY_PROFILE_BASE64`. The latter is decoded into a private temporary directory
+and removed on exit; the signed profile is also embedded in the final app as
+required for distribution. Notarization credentials still need to be configured.
+
+CI already receives `SECCY_PROFILE_BASE64` from the GitHub Actions secret in the
+`release-cli` environment. `scripts/macos-ci.sh` decodes it under `RUNNER_TEMP`,
+exports `SECCY_PROFILE` through `GITHUB_ENV`, and removes the temporary profile in
+the workflow's cleanup step. To publish the fnox-managed value to that CI secret:
+
+```sh
+fnox get SECCY_PROFILE_BASE64 | gh secret set SECCY_PROFILE_BASE64 --env release-cli
+```
+
+Commit the encrypted fnox entry to share it with developers holding its age key.
+CI can continue using the GitHub secret without receiving the fnox decryption key.
+
+The task builds, signs, notarizes, and installs into the normal location. It
+replaces even an identical version number, but skips login-service refresh and
+fnox initialization/linking (`install.sh --force --no-integrate`). It replaces the
+shared installed app; it is not a sandbox or a separate development installation.
+
+`seccy shell NAME` uses an **already provisioned** key from the normal inventory.
+If needed, configure a key and run `seccy provision` first as described below.
+No `seccy activate`, service installation, or persistent Git/SSH integration is
+needed. The shell:
+
+- Starts this executable's agent on a private temporary socket, leaving any
+  existing agent running. Exiting stops the temporary agent and removes its files.
+- Launches `$SHELL` (Fish, Bash, or Zsh), reads its usual non-login startup files,
+  then applies the session settings. `--shell /bin/zsh` selects another shell.
+- Inherits normal Git configuration and existing environment-based Git settings,
+  then overrides SSH signing format/program, signing key, and automatic commit/tag
+  signing. Author identity, remotes, and signature verification policy are retained.
+- Sets `SSH_AUTH_SOCK`, and puts a session `ssh` wrapper and this `seccy` executable
+  first on `PATH`. Git's SSH transport also uses that wrapper. The wrapper forces
+  the session agent, supplies the selected public key with `IdentitiesOnly=yes`,
+  and disables connection multiplexing so an existing connection cannot bypass
+  the test. Other host settings and configured identity files remain inherited.
+- Uses a temporary `XDG_RUNTIME_DIR` so Seccy's secrets commands reach the same
+  agent. Config, registry, Keychain keys, and persistent logs remain the normal ones.
+
+Startup aliases/functions named `ssh` or `seccy` are removed in this child shell
+to keep routing predictable. Explicit executable paths and later manual overrides
+can bypass the session settings. Other terminal sessions and configuration files
+are unaffected; commits, remote operations, and key-management commands still have
+their usual persistent effects. Remote SSH access requires the key to be authorized
+on that remote; HTTPS Git remotes do not use an SSH agent.
+
+```sh
+# Inside the shell, in a test repository:
+git commit --allow-empty -m "Test Seccy"
+git tag -s test-seccy -m "Test tag"
+ssh -T git@github.com
+exit
+
+# Or run one command, returning its exit status:
+seccy shell work --command 'git commit --allow-empty -m "Test Seccy"'
+```
+
+The launcher prints the temporary directory; `agent.log` there captures startup
+and agent output until the shell exits. To test the custom UI, enable
+`[experimental] macos_ui = true` in the normal Seccy configuration.
+
+#### Capture requests for gallery replay
+
+```sh
+seccy shell auth --capture ~/seccy-captures
+# Perform the Git/SSH operations to capture, then exit the shell.
+mise run macos/ui
+```
+
+In the gallery, choose **Open capture…** and select a `request-*.json` file.
+Appearance and authorization-state controls work with captured requests; live
+Touch ID is disabled for replay. **Back to examples** restores the synthetic
+fixtures.
+
+On macOS, captures are saved before authorization/key use, including requests
+that are subsequently denied and operations using `notify` keys. The versioned
+JSON contains the original Rust→Swift request, full process diagnostics and
+arguments, decoded/raw signing payload, timestamp, key mode, and embedded process
+icons. Replay uses those icons rather than looking up old PIDs or executable paths.
+Git SSH signing still contains a digest, not the original commit/tag contents.
+
+The capture directory persists after shell exit. It is created with permissions
+0700 and files are written with permissions 0600; an existing directory must
+already be private. Capture failures are reported in the session's `agent.log`
+and normal Seccy logs without changing authorization behavior. For a manually
+started agent, `SECCY_CAPTURE_DIR=/absolute/private/directory` enables the same
+capture path. No debug logging or custom-UI setting is required.
+
+Captures contain real arguments, paths, and payloads. Review them before sharing
+or checking them into the repository as fixtures.
+
 Create a macOS App ID (default `fyi.seccy.cli`) and matching provisioning profile in your Apple Developer account, and install its signing certificate. Package with:
 
 ```sh
 export SECCY_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
 export SECCY_PROFILE='/absolute/path/to/seccy.provisionprofile'
-# Set SECCY_BUNDLE_ID if using a different registered identifier.
 mise run package
 export PATH="$PWD/target/Seccy.app/Contents/MacOS:$PATH"
 ```
@@ -416,9 +546,10 @@ Each process and ancestor also has a `details` object:
   denied, malformed, or oversized data. If the observed process's start time or
   executable changes during inspection, its enriched snapshot is discarded.
 
-With `LOG_LEVEL=debug` or `trace`, `details.arguments` contains the complete
-UTF-8 argv array when available. At other levels it is omitted, although selected
-interpreted arguments remain. The parser stops after the kernel-reported argument
+On macOS, `details.arguments` contains the complete UTF-8 argv array when available,
+independently of logging level, for inspection in the experimental UI. On Linux,
+the full array is retained only with `LOG_LEVEL=debug` or `trace`.
+The parser stops after the kernel-reported argument
 count and never includes trailing process environment entries. Argument arrays
 can contain secrets passed on a command line. Non-UTF-8 or oversized argument
 buffers are reported as unavailable rather than silently altered.
@@ -428,6 +559,10 @@ individual OS/filesystem calls are synchronous, not subject to a hard timeout.
 It does not use Accessibility, window enumeration, screenshots, or automation
 permissions. Full metadata is in `caller_json`; prompts show the useful observed
 context in the system prompt, or a scrollable SwiftUI panel when experimental UI is enabled.
+The experimental panel includes expandable JSON snapshots for every process and
+request diagnostics with decoded signing payload fields, raw signing bytes in
+Base64, and UTF-8 when valid. Git SSH signatures contain a content digest, not
+the original commit or tag contents. Gallery diagnostics are synthetic examples.
 
 At `debug`/`trace`, a `sign_payload` event additionally contains the **exact bytes
 passed to the signing backend**, encoded as base64 in `fields.payload`, and a
@@ -505,7 +640,7 @@ every return path. Secure Enclave `biometryCurrentSet` ACLs remain enforced.
 Approvals apply only to this request (or an explicitly named secrets batch);
 remembered process permissions are not implemented.
 
-Run `mise run macos:ui` for the state gallery, or open
+Run `mise run macos/ui` for the state gallery (`mise run :macos/ui:watch` to rebuild and restart on changes), or open
 `pkgs/macos-ui/SeccyUI.xcodeproj` and select **Gallery**. The live Touch ID demo and simulated previews never access
 keys. Preview controls and the production-shaped prompt are separate windows.
 The gallery defaults to system appearance and offers Light/Dark overrides and a

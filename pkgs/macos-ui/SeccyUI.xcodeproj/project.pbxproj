@@ -190,7 +190,7 @@
 			<key>shellScript</key>
 			<string>export PATH="$HOME/.cargo/bin:$PATH"
 cd "$SRCROOT/../.."
-cargo run --quiet -p seccy_copy --example generate-swift</string>
+cargo run --quiet -p seccy_ui --example generate-swift</string>
 			<key>name</key>
 			<string>Generate shared Fluent copy</string>
 		</dict>
@@ -392,7 +392,7 @@ cargo run --quiet -p seccy_copy --example generate-swift</string>
 			<key>shellScript</key>
 			<string>export PATH="$HOME/.cargo/bin:$PATH"
 cd "$SRCROOT/../.."
-cargo run --quiet -p seccy_copy --example generate-swift</string>
+cargo run --quiet -p seccy_ui --example generate-swift</string>
 			<key>name</key>
 			<string>Generate shared Fluent copy</string>
 		</dict>
@@ -412,6 +412,7 @@ cargo run --quiet -p seccy_copy --example generate-swift</string>
 			<key>outputPaths</key>
 			<array>
 				<string>$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Seccy.icns</string>
+				<string>$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Assets.car</string>
 			</array>
 			<key>runOnlyForDeploymentPostprocessing</key>
 			<integer>0</integer>

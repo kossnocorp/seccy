@@ -1,0 +1,52 @@
+{
+  "operation": {
+    "Ssh": {
+      "username": "git",
+      "host": "github.com",
+      "port": null,
+      "git_operation": "git pull"
+    }
+  },
+  "processes": [
+    {
+      "pid": 44405,
+      "label": "ssh"
+    },
+    {
+      "pid": 44404,
+      "label": "git fetch"
+    },
+    {
+      "pid": 44402,
+      "label": "git pull"
+    },
+    {
+      "pid": 41810,
+      "label": "fish"
+    },
+    {
+      "pid": 41801,
+      "label": "bash"
+    },
+    {
+      "pid": 40858,
+      "label": "fish"
+    },
+    {
+      "pid": 37945,
+      "label": "Code Helper"
+    },
+    {
+      "pid": 36822,
+      "label": "Code"
+    },
+    {
+      "pid": 1,
+      "label": "launchd"
+    }
+  ],
+  "directory": "/Users/example/code/tmp/seccy-test",
+  "keys": [
+    "auth"
+  ]
+}

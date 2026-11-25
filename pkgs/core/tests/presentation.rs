@@ -31,11 +31,15 @@ fn caller() -> Caller {
             },
         }),
         ancestors: vec![],
+        ancestry_interruption: None,
     }
 }
 fn identity() -> Identity {
     Identity {
         name: "work".into(),
+        storage_id: "work".into(),
+        uses: None,
+        display_name: None,
         mode: Mode::Prompt,
         public_key: String::new(),
         fingerprint: String::new(),
@@ -100,4 +104,58 @@ fn semantic_presenter_keeps_git_context_and_handles_missing_ssh_host() {
         identity.sign_description(0, &caller, &ssh),
         "Approve this SSH authentication?\n\nThe process chain git commit running at /repo wants to use the work key to authenticate over SSH as git.\n\nNo server host key included"
     );
+}
+
+#[test]
+fn explicit_ssh_hostname_selects_provider_for_the_current_git_operation() {
+    let mut caller = caller();
+    let mut git = caller.process.clone().unwrap();
+    git.details.command.as_mut().unwrap().subcommand = Some("push".into());
+    caller.ancestors.push(git);
+    for option in ["HostName=ssh.github.com", "hostname ssh.github.com"] {
+        let args = ["ssh", "-o", option, "git@work-alias"].map(str::to_owned);
+        caller.process.as_mut().unwrap().details.command =
+            seccy_core::process::interpret("/usr/bin/ssh", &args, None);
+        let payload = Payload::SshAuthentication {
+            username: "git".into(),
+            service: "ssh-connection".into(),
+            method: "publickey".into(),
+            algorithm: String::new(),
+            session_id_base64: String::new(),
+            host: None,
+        };
+        let activity = caller.signing_activity("work", &payload);
+        assert_eq!(activity.header("Terminal").target, "github");
+        assert_eq!(activity.header("Terminal").action, "cloud_upload");
+    }
+}
+
+#[test]
+fn git_pull_is_the_initiating_operation_for_its_fetch_helper() {
+    use seccy_core::presentation::Operation;
+
+    let mut caller = caller();
+    let git = caller.process.clone().unwrap();
+    caller.process.as_mut().unwrap().details.command = seccy_core::process::interpret(
+        "/usr/bin/ssh",
+        &["ssh".into(), "git@github.com".into()],
+        None,
+    );
+    let payload = Payload::SshAuthentication {
+        username: "git".into(),
+        service: "ssh-connection".into(),
+        method: "publickey".into(),
+        algorithm: String::new(),
+        session_id_base64: String::new(),
+        host: None,
+    };
+    for (verb, expected) in [("fetch", "git fetch"), ("pull", "git pull")] {
+        let mut parent = git.clone();
+        parent.details.command.as_mut().unwrap().subcommand = Some(verb.into());
+        caller.ancestors.push(parent);
+        let activity = caller.signing_activity("work", &payload);
+        assert!(
+            matches!(activity.operation, Operation::Ssh { git_operation: Some(ref op), .. } if op == expected)
+        );
+    }
 }
