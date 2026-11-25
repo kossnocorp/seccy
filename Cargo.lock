@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1118,7 +1118,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_linux"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_macos"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1166,7 +1166,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_macos_ui"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "objc2",
@@ -1179,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "seccy_ui"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "fluent-bundle",
  "insta",
